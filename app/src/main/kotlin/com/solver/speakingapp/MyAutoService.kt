@@ -17,6 +17,7 @@ import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.widget.TextView
 import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.Text
 import com.google.mlkit.vision.text.TextRecognition
 import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 import kotlin.math.abs
@@ -30,26 +31,32 @@ class MyAutoService : AccessibilityService() {
     private var overlayTextView: TextView? = null
     private val ocrClient by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
-    // ===== 보정 값 (필요시 숫자만 바꾸세요) =====
+    // ===== 보정 값 =====
     private val slots = arrayOf(
         Pair(278f, 1730f), // S0 좌상
         Pair(279f, 2005f), // S1 좌하
         Pair(798f, 1732f), // S2 우상
         Pair(799f, 2002f)  // S3 우하
     )
-    private val fillOrder = listOf(0, 1, 2, 3)
     private val bandTop = 1640
     private val bandBottom = 2140
     private val snapRadius = 300f
-    private val NEXT_BTN = Pair(900f, 2370f)   // '다음 문제' 버튼 (안 맞으면 조정)
+    private val NEXT_BTN = Pair(900f, 2370f)
 
-    private val stepDelay = 1200L      // 탭 사이 간격 (≈1.2초)
-    private val pollDelay = 1200L      // 카드 대기 폴링 간격
-    private val cardWaitPolls = 15     // 카드 최대 대기 횟수 (≈18초)
-    private val tapDuration = 60L      // 탭 누르는 시간(ms)
+    private val stepDelay = 1200L
+    private val pollDelay = 1200L
+    private val cardWaitPolls = 15
+    private val tapDuration = 60L
+
+    // 빈칸/카드 판별용 (칸 영역에 밝은 픽셀이 이만큼 이상이면 카드 있음)
+    private val occBrightThreshold = 170   // 픽셀 밝기 임계(0~255). 흰 글자 감지용
+    private val occMinBrightPixels = 4     // 이만큼 이상 밝으면 카드 있다고 판단
+    private val occHalfW = 90
+    private val occHalfH = 35
 
     @Volatile private var solving = false
     private var retryAtSameStep = 0
+    private var captureRetry = 0
     private var target: List<String> = emptyList()
 
     override fun onServiceConnected() {
@@ -83,9 +90,7 @@ class MyAutoService : AccessibilityService() {
                 PixelFormat.TRANSLUCENT
             ).apply { gravity = Gravity.TOP; y = 90 }
             windowManager?.addView(overlayTextView, params)
-        } catch (t: Throwable) {
-            Log.e("SOLVE", "onServiceConnected 예외", t)
-        }
+        } catch (t: Throwable) { Log.e("SOLVE", "onServiceConnected 예외", t) }
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
@@ -98,9 +103,7 @@ class MyAutoService : AccessibilityService() {
                 handler.removeCallbacksAndMessages(null)
                 updateLog("🛑 중단됨"); return true
             }
-        } catch (t: Throwable) {
-            Log.e("SOLVE", "onKeyEvent 예외", t); return true
-        }
+        } catch (t: Throwable) { Log.e("SOLVE", "onKeyEvent 예외", t); return true }
         return super.onKeyEvent(event)
     }
 
@@ -109,77 +112,70 @@ class MyAutoService : AccessibilityService() {
     private fun startSolve() {
         if (solving) { updateLog("이미 풀이 중..."); return }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) { Log.e("SOLVE", "Android 11+ 필요"); return }
-        solving = true
-        retryAtSameStep = 0
+        solving = true; retryAtSameStep = 0; captureRetry = 0
         updateLog("⏳ 카드 대기 중...")
-        Log.d("SOLVE", "===== 트리거됨, 카드 대기 시작 =====")
+        Log.d("SOLVE", "===== 트리거됨, 카드 대기 =====")
         waitForCards(0)
     }
 
-    // 카드가 화면에 나타날 때까지 폴링 → 나타나면 STT 문장 읽고 풀이 시작
     private fun waitForCards(attempt: Int) {
         if (!solving) return
-        captureThen { result ->
+        captureThen { result, _ ->
             val slotWord = extractSlotWords(result)
             if (slotWord.isNotEmpty()) {
                 val raw = AudioCaptureService.lastSentence
                 target = raw.lowercase().split(Regex("\\s+")).map { normalize(it) }.filter { it.isNotEmpty() }
-                Log.d("SOLVE", "카드 감지(${slotWord.size}개). 사용할 STT 문장: \"$raw\" → 토큰 $target")
-                if (target.isEmpty()) {
-                    updateLog("❌ STT 문장이 비어있음. 오디오를 먼저 들려주세요"); solving = false; return@captureThen
-                }
-                updateLog("🤖 풀이: ${target.joinToString(" ")}")
+                Log.d("SOLVE", "카드 감지(${slotWord.size}). STT: \"$raw\" → $target")
+                if (target.isEmpty()) { updateLog("❌ STT 비어있음, 오디오 먼저"); solving = false; return@captureThen }
+                updateLog("🤖 ${target.joinToString(" ")}")
                 handler.postDelayed({ solveStep(0) }, stepDelay)
-            } else {
-                if (attempt < cardWaitPolls) {
-                    updateLog("⏳ 카드 대기 중...(${attempt + 1})")
-                    handler.postDelayed({ waitForCards(attempt + 1) }, pollDelay)
-                } else {
-                    Log.e("SOLVE", "카드가 안 떴습니다"); updateLog("❌ 카드가 안 떴어요"); solving = false
-                }
-            }
+            } else if (attempt < cardWaitPolls) {
+                updateLog("⏳ 카드 대기...(${attempt + 1})")
+                handler.postDelayed({ waitForCards(attempt + 1) }, pollDelay)
+            } else { Log.e("SOLVE", "카드 안 뜸"); updateLog("❌ 카드가 안 떴어요"); solving = false }
         }
     }
 
     private fun solveStep(p: Int) {
         if (!solving) return
         if (p >= target.size) {
-            updateLog("✅ 전부 배치 완료 → 다음 문제")
-            Log.d("SOLVE", "전부 배치 완료, NEXT 탭")
+            updateLog("✅ 완료 → 다음 문제")
+            Log.d("SOLVE", "완료, NEXT 탭")
             handler.postDelayed({ clickAt(NEXT_BTN.first, NEXT_BTN.second); solving = false }, 900)
             return
         }
-        captureThen { result ->
+        captureThen { result, bmp ->
             if (!solving) return@captureThen
             val slotWord = extractSlotWords(result)
+            val occ = IntArray(4) { brightCount(bmp, it) }
+            val occupied = BooleanArray(4) { occ[it] >= occMinBrightPixels }
             val needed = target[p]
-            val k = min(4, target.size - p)
-            val occupied = fillOrder.take(k)
-            Log.d("SOLVE", "[$p] 필요='$needed' k=$k 인식=${occupied.associateWith { slotWord[it] }}")
+            Log.d("SOLVE", "[$p] 필요='$needed' 단어=${(0..3).associateWith { slotWord[it] }} 밝기=${occ.toList()} 카드=${occupied.toList()}")
 
-            var slotToTap = occupied.firstOrNull { si ->
-                slotWord[si]?.let { it == needed || lev(it, needed) <= 1 } == true
+            // 1) 글자 매칭 (카드 있는 칸 중)
+            var slotToTap = (0..3).firstOrNull { si ->
+                occupied[si] && slotWord[si]?.let { it == needed || lev(it, needed) <= 1 } == true
             } ?: -1
+            // 2) 소거법: 카드는 있는데 글자 인식이 안 된 칸이 딱 하나면 그게 정답
             if (slotToTap < 0) {
-                val unrec = occupied.filter { slotWord[it] == null }
-                if (unrec.size == 1) { slotToTap = unrec[0]; Log.d("SOLVE", "[$p] 소거법 → S$slotToTap") }
+                val unrecOcc = (0..3).filter { occupied[it] && slotWord[it] == null }
+                if (unrecOcc.size == 1) { slotToTap = unrecOcc[0]; Log.d("SOLVE", "[$p] 소거법 → S$slotToTap") }
             }
 
             if (slotToTap >= 0) {
                 val (x, y) = slots[slotToTap]
-                Log.d("SOLVE", "[$p] '$needed' → S$slotToTap ($x,$y) 탭")
+                Log.d("SOLVE", "[$p] '$needed' → S$slotToTap 탭")
                 updateLog("[${p + 1}/${target.size}] '$needed'")
                 clickAt(x, y)
                 retryAtSameStep = 0
                 handler.postDelayed({ solveStep(p + 1) }, stepDelay)
             } else {
-                retryOrAbort(p, "'$needed' 못 찾음(인식=${slotWord.values})")
+                retryOrAbort(p, "'$needed' 못 찾음(단어=${slotWord.values}, 카드칸=${(0..3).filter { occupied[it] }})")
             }
         }
     }
 
-    // 스크린샷 → 소프트웨어 비트맵 → OCR → 콜백(result)
-    private fun captureThen(onResult: (com.google.mlkit.vision.text.Text) -> Unit) {
+    private fun captureThen(onResult: (Text, Bitmap) -> Unit) {
         takeScreenshot(Display.DEFAULT_DISPLAY, applicationContext.mainExecutor,
             object : TakeScreenshotCallback {
                 override fun onSuccess(s: ScreenshotResult) {
@@ -191,23 +187,22 @@ class MyAutoService : AccessibilityService() {
                         val bmp = raw.copy(Bitmap.Config.ARGB_8888, false)
                         try { raw.recycle() } catch (_: Throwable) {}
                         ocrClient.process(InputImage.fromBitmap(bmp, 0))
-                            .addOnSuccessListener { r -> try { onResult(r) } catch (t: Throwable) { Log.e("SOLVE", "결과처리 예외", t) } }
-                            .addOnFailureListener { e -> retryCurrent("OCR실패 ${e.message}") }
+                            .addOnSuccessListener { r ->
+                                try { onResult(r, bmp) } catch (t: Throwable) { Log.e("SOLVE", "결과처리 예외", t) }
+                                finally { try { bmp.recycle() } catch (_: Throwable) {} }
+                            }
+                            .addOnFailureListener { e -> try { bmp.recycle() } catch (_: Throwable) {}; retryCurrent("OCR실패 ${e.message}") }
                     } catch (t: Throwable) { retryCurrent("캡처처리 ${t.message}") }
                 }
                 override fun onFailure(code: Int) { retryCurrent("스크린샷실패 code=$code") }
             })
     }
 
-    // 현재 동작(대기/풀이) 중 캡처 단계 실패 시: 단순히 잠시 후 같은 단계 재시도를 위해 로그만.
-    // (solveStep/waitForCards 자체가 재귀 호출되므로 여기선 가벼운 재시도)
-    private var captureRetry = 0
     private fun retryCurrent(reason: String) {
         if (!solving) return
         captureRetry++
         Log.w("SOLVE", "캡처 재시도($captureRetry): $reason")
-        if (captureRetry > 5) { updateLog("❌ 캡처 반복 실패"); solving = false; captureRetry = 0 }
-        // 다음 solveStep/waitForCards 호출에서 자연스럽게 다시 캡처됨
+        if (captureRetry > 6) { updateLog("❌ 캡처 반복 실패"); solving = false }
     }
 
     private fun retryOrAbort(p: Int, reason: String) {
@@ -218,7 +213,7 @@ class MyAutoService : AccessibilityService() {
         else { Log.e("SOLVE", "[$p] 중단: $reason"); updateLog("❌ 중단: $reason"); solving = false }
     }
 
-    private fun extractSlotWords(result: com.google.mlkit.vision.text.Text): HashMap<Int, String> {
+    private fun extractSlotWords(result: Text): HashMap<Int, String> {
         val slotWord = HashMap<Int, String>()
         for (block in result.textBlocks) for (line in block.lines) for (el in line.elements) {
             val b = el.boundingBox ?: continue
@@ -229,6 +224,26 @@ class MyAutoService : AccessibilityService() {
             if (w.isNotEmpty()) slotWord[si] = w
         }
         return slotWord
+    }
+
+    // 칸 영역에서 '밝은(흰 글자) 픽셀' 개수 → 카드 유무 판별
+    private fun brightCount(bmp: Bitmap, slot: Int): Int {
+        val cx = slots[slot].first.toInt(); val cy = slots[slot].second.toInt()
+        val x0 = (cx - occHalfW).coerceAtLeast(0); val x1 = (cx + occHalfW).coerceAtMost(bmp.width - 1)
+        val y0 = (cy - occHalfH).coerceAtLeast(0); val y1 = (cy + occHalfH).coerceAtMost(bmp.height - 1)
+        var bright = 0
+        var y = y0
+        while (y <= y1) {
+            var x = x0
+            while (x <= x1) {
+                val px = bmp.getPixel(x, y)
+                val r = (px shr 16) and 0xff; val g = (px shr 8) and 0xff; val bch = px and 0xff
+                if (r * 0.299 + g * 0.587 + bch * 0.114 > occBrightThreshold) bright++
+                x += 2
+            }
+            y += 2
+        }
+        return bright
     }
 
     private fun nearestSlot(x: Float, y: Float): Int? {
@@ -262,9 +277,7 @@ class MyAutoService : AccessibilityService() {
         dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
     }
 
-    private fun updateLog(msg: String) {
-        handler.post { try { overlayTextView?.text = msg } catch (_: Throwable) {} }
-    }
+    private fun updateLog(msg: String) { handler.post { try { overlayTextView?.text = msg } catch (_: Throwable) {} } }
 
     override fun onDestroy() {
         super.onDestroy()
