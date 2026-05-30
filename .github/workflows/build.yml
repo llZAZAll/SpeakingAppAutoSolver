@@ -11,27 +11,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 1. 자바 환경 세팅
       - name: set up JDK 17
         uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
-          cache: gradle
 
-      - name: Download Gradle Wrapper JAR
-        run: |
-          mkdir -p gradle/wrapper
-          curl -L -o gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar
+      # 2. ✨ [핵심 치트키] 깨진 파일 무시하고, 정식 Gradle 환경을 알아서 다운로드 및 자동 조립
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.2' # 우리가 적어둔 버전과 일치시킴
 
-      # ✨ [수정] gradlew 뿐만 아니라 다운로드한 jar 파일에도 실행 권한을 함께 부여합니다.
-      - name: Grant execute permission for graduation tools
-        run: |
-          chmod +x gradlew
-          chmod +x gradle/wrapper/gradle-wrapper.jar
-
+      # 3. 깨끗하게 정비된 환경에서 빌드 명령 수행
       - name: Build with Gradle
-        run: ./gradlew assembleDebug
+        run: gradle assembleDebug # 뒤에 gradlew 대신 순정 gradle 명령어로 직접 빌드합니다.
 
+      # 4. 완성된 APK 업로드
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
