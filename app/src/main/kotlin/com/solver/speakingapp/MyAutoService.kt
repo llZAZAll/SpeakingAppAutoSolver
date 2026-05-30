@@ -22,18 +22,20 @@ class MyAutoService : AccessibilityService() {
     private var windowManager: WindowManager? = null
     private var overlayTextView: TextView? = null
 
-    // 💡 [설정] 본인 스마트폰 해상도에 맞는 실제 X, Y 좌표값으로 수정이 필요합니다.
-    // 아래 수치는 일반적인 1080 x 2400 해상도 스마트폰 기준 대략적인 예시 위치입니다.
-    private val LISTEN_BUTTON_X = 540f   // 다시 듣기 버튼 (화면 가로 중앙)
-    private val LISTEN_BUTTON_Y = 1950f  // 다시 듣기 버튼 (화면 하단 보라색 버튼 위치)
-
-    // 화면 하단에 배치된 단어 조각들의 예상 좌표 목록 (4개 배치 기준 예시)
-    private val WORD_SPOTS = arrayOf(
-        Pair(220f, 1600f),  // 1번째 단어 위치
-        Pair(430f, 1600f),  // 2번째 단어 위치
-        Pair(650f, 1600f),  // 3번째 단어 위치
-        Pair(860f, 1600f)   // 4번째 단어 위치
+    // 🎯 [Z Fold 7 커버 스크린 전용 좌표]
+    // 1. 문제 화면 좌표
+    private val LISTEN_BTN = Pair(480f, 2220f) // 하단 보라색 '다시 듣기' 정중앙
+    
+    // 2x2 단어 슬롯 4개의 고정 좌표 (빈자리에 새 단어가 나와도 무조건 이 4곳만 팹니다)
+    private val WORD_SLOTS = arrayOf(
+        Pair(240f, 1710f), // 1번 슬롯 (좌측 상단, 예: what)
+        Pair(720f, 1710f), // 2번 슬롯 (우측 상단, 예: is)
+        Pair(240f, 1980f), // 3번 슬롯 (좌측 하단, 예: time)
+        Pair(720f, 1980f)  // 4번 슬롯 (우측 하단, 예: it)
     )
+
+    // 2. 성공 화면 좌표
+    private val NEXT_BTN = Pair(800f, 2100f) // 우측 하단 '다음 문제' 버튼 정중앙
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -48,7 +50,7 @@ class MyAutoService : AccessibilityService() {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "🎯 절대 좌표 터치 모드 가동\n(영어 앱 켜고 볼륨[-] 누르기)"
+                text = "🤖 Z폴드 오토 봇 대기중\n(볼륨[-] 시작 / 볼륨[+] 강제중지)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundColor(android.graphics.Color.parseColor("#CC000000"))
@@ -79,11 +81,19 @@ class MyAutoService : AccessibilityService() {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
+        // 볼륨[-] 누르면 시작
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
             if (!isTaskRunning) {
-                updateLog("🚀 지정된 X, Y 좌표로 강제 터치 신호 주입 시작...")
-                simulateCoordinateClicks()
+                updateLog("🚀 매크로 시작! (기관총 터치 가동)")
+                startAutoBot()
             }
+            return true
+        }
+        // 볼륨[+] 누르면 긴급 정지
+        if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
+            isTaskRunning = false
+            handler.removeCallbacksAndMessages(null)
+            updateLog("🛑 매크로 긴급 정지됨")
             return true
         }
         return super.onKeyEvent(event)
@@ -91,59 +101,63 @@ class MyAutoService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    private fun simulateCoordinateClicks() {
+    private fun startAutoBot() {
         isTaskRunning = true
+        
+        // 1. 다시 듣기 터치
+        clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
+        updateLog("🔊 다시 듣기 클릭")
 
-        // 1. 다시 듣기 버튼 위치 강제 터치
-        clickAt(LISTEN_BUTTON_X, LISTEN_BUTTON_Y)
-        updateLog("🔊 다시 듣기 터치 주입 (X:$LISTEN_BUTTON_X, Y:$LISTEN_BUTTON_Y)")
-
-        // 2. 오디오 재생 동기화 대기 후(2.5초) 단어 영역 순차 터치
+        // 2. 1.5초 뒤부터 단어 4칸을 무차별 스캔(터치) 시작
         handler.postDelayed({
-            updateLog("🔤 단어 슬롯 좌표 ${WORD_SPOTS.size}개 매크로 가동")
+            updateLog("⚔️ 4칸 슬롯 무차별 타격 중...")
             
-            WORD_SPOTS.forEachIndexed { index, spot ->
-                handler.postDelayed({
-                    clickAt(spot.first, spot.second)
-                    updateLog("👆 [순서 ${index + 1}] 터치 완료 (X:${spot.first}, Y:${spot.second})")
-                }, (index + 1) * 400L) // 0.4초 간격 터치
+            // 8단어 이상이 나와도 충분히 다 누를 수 있도록 4칸을 10바퀴(총 40번) 미친듯이 돕니다.
+            val totalSpamLoops = 10 
+            var delayAccumulator = 0L
+
+            for (loop in 0 until totalSpamLoops) {
+                WORD_SLOTS.forEachIndexed { index, spot ->
+                    handler.postDelayed({
+                        if(isTaskRunning) clickAt(spot.first, spot.second)
+                    }, delayAccumulator)
+                    delayAccumulator += 150L // 0.15초 간격으로 터치
+                }
             }
 
+            // 3. 문제 풀이가 끝날 때까지 넉넉히 대기 후 '다음 문제' 터치
             handler.postDelayed({
-                isTaskRunning = false
-                updateLog("✅ 좌표 시퀀스 완료. 다음 문제에서 볼륨[-]을 누르세요.")
-            }, (WORD_SPOTS.size + 1) * 400L + 1000L)
+                if(isTaskRunning) {
+                    updateLog("⏭️ 다음 문제 버튼 터치")
+                    clickAt(NEXT_BTN.first, NEXT_BTN.second)
+                }
+            }, delayAccumulator + 1500L)
 
-        }, 2500)
+            // 4. 다음 문제로 넘어간 뒤 다시 초기화 및 루프 준비
+            handler.postDelayed({
+                if(isTaskRunning) {
+                    updateLog("✅ 사이클 완료. 계속하려면 볼륨[-]을 누르세요.")
+                    isTaskRunning = false
+                }
+            }, delayAccumulator + 3000L)
+
+        }, 1500)
     }
 
-    // 💡 안드로이드 시스템에 좌표 신호를 다이렉트로 찔러넣는 핵심 함수
     private fun clickAt(x: Float, y: Float) {
-        val path = Path().apply {
-            moveTo(x, y)
-        }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 100)
-        val gestureBuilder = GestureDescription.Builder().apply {
-            addStroke(stroke)
-        }
+        val path = Path().apply { moveTo(x, y) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 50) // 0.05초의 매우 짧은 터치
+        val gestureBuilder = GestureDescription.Builder().apply { addStroke(stroke) }
         dispatchGesture(gestureBuilder.build(), null, null)
     }
 
     private fun updateLog(message: String) {
-        handler.post {
-            overlayTextView?.text = message
-        }
+        handler.post { overlayTextView?.text = message }
     }
 
     override fun onDestroy() {
         super.onDestroy()
-        try {
-            if (windowManager != null && overlayTextView != null) {
-                windowManager?.removeView(overlayTextView)
-            }
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
+        try { windowManager?.removeView(overlayTextView) } catch (e: Exception) {}
     }
 
     override fun onInterrupt() {
