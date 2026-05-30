@@ -31,18 +31,18 @@ class MyAutoService : AccessibilityService() {
             notificationTimeout = 500
         }
 
-        // 💡 화면 최상단에 고정될 투명 안내창 생성
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
                 text = "🤖 매크로 대기 중...\n(영어 앱을 켜고 볼륨 단추[-]를 누르세요)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
-                setBackgroundColor(android.graphics.Color.parseColor("#AA000000")) // 반투명 검은색 뷰
+                setBackgroundColor(android.graphics.Color.parseColor("#AA000000")) 
                 setPadding(30, 30, 30, 30)
             }
 
-            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES_O) {
+            // 💡 수정된 부분: VERSION_CODES.O 로 마침표를 찍었습니다.
+            val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
             } else {
                 WindowManager.LayoutParams.TYPE_PHONE
@@ -56,7 +56,7 @@ class MyAutoService : AccessibilityService() {
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP
-                y = 120 // 상단 바 아래에 위치하도록 설정
+                y = 120 
             }
 
             windowManager?.addView(overlayTextView, params)
@@ -73,7 +73,7 @@ class MyAutoService : AccessibilityService() {
             } else {
                 updateLog("⏳ 이미 퀴즈 연산이 실행 중입니다.")
             }
-            return true // 볼륨 다운 동작 완전 격리
+            return true 
         }
         return super.onKeyEvent(event)
     }
@@ -83,7 +83,7 @@ class MyAutoService : AccessibilityService() {
     private fun forceScanAndClick() {
         val rootNode = rootInActiveWindow
         if (rootNode == null) {
-            updateLog("❌ 에러: 시스템이 영어 앱의 화면 구조를 가져오지 못했습니다. (보안 락 또는 유니티 엔진 가능성)")
+            updateLog("❌ 에러: 시스템이 앱의 화면 구조를 가져오지 못했습니다.")
             return
         }
 
@@ -97,27 +97,25 @@ class MyAutoService : AccessibilityService() {
             return
         }
 
-        // 텍스트 속성이 온전한 영단어 노드 수집
         val wordNodes = clickableNodes.filter { 
             it.text != null && it.text.toString().matches(Regex("^[a-zA-Z]{2,}$")) 
         }
         
         updateLog("📊 분석 리포트\n- 검출된 총 UI 버튼: ${clickableNodes.size}개\n- 매칭된 영어 단어: ${wordNodes.size}개")
 
-        // 하단 제어 구역(다시 듣기) 지정
         val listenButton = clickableNodes.lastOrNull { 
             it.text == null || !it.text.toString().matches(Regex("^[a-zA-Z]+$")) 
         }
 
         if (listenButton != null) {
             listenButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            updateLog("🔊 하단 보라색 [다시 듣기] 영역 터치 완료. 오디오 재생 동기화 대기 중...")
+            updateLog("🔊 하단 보라색 버튼 터치 완료. 오디오 재생 동기화 대기 중...")
         }
 
         handler.postDelayed({
             val sortedWords = wordNodes.sortedBy { it.text.toString().lowercase() }
             if (sortedWords.isNotEmpty()) {
-                updateLog("🔤 알파벳 정렬 시퀀스 제어 시작 (${sortedWords.size}개 단어)")
+                updateLog("🔤 단어 ${sortedWords.size}개 터치 시작")
                 sortedWords.forEachIndexed { index, node ->
                     handler.postDelayed({
                         node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
@@ -125,12 +123,12 @@ class MyAutoService : AccessibilityService() {
                     }, (index + 1) * 400L)
                 }
             } else {
-                updateLog("⚠️ 경고: 화면 뷰 노드에서 일반 영단어 텍스트를 파싱하지 못했습니다.")
+                updateLog("⚠️ 경고: 화면에서 영단어 텍스트를 파싱하지 못했습니다.")
             }
 
             handler.postDelayed({
                 isTaskRunning = false
-                updateLog("✅ 한 문제 시퀀스 종료. 다음 문제에서 볼륨[-]을 다시 누르세요.")
+                updateLog("✅ 시퀀스 종료. 다음 문제에서 볼륨[-]을 누르세요.")
             }, (sortedWords.size + 1) * 400L + 1200L)
 
         }, 2500)
@@ -149,7 +147,6 @@ class MyAutoService : AccessibilityService() {
         }
     }
 
-    // 상단 텍스트 레이어에 실시간 문자열 인쇄
     private fun updateLog(message: String) {
         handler.post {
             overlayTextView?.text = message
