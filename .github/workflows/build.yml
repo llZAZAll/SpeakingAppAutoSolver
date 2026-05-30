@@ -24,14 +24,16 @@ jobs:
         with:
           gradle-version: '8.2'
 
-      # 2-5. ✨ Vosk 영어 모델을 받아서 assets에 넣기 (직접 업로드 안 해도 됨)
+      # 2-5. Vosk 영어 모델 다운로드 + assets 배치 + uuid 파일 생성
       - name: Download Vosk model
         run: |
           curl -L -o vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-en-us-0.15.zip
           unzip -q vosk.zip
           mkdir -p app/src/main/assets/vosk-model-en
           cp -r vosk-model-small-en-us-0.15/* app/src/main/assets/vosk-model-en/
-          echo "=== 모델 파일 목록 ==="
+          # Vosk StorageService가 첫 번째로 여는 uuid 파일 (없으면 모델 로드 실패)
+          echo "speakingapp-vosk-en-0.15" > app/src/main/assets/vosk-model-en/uuid
+          echo "=== 모델 파일 목록 (am/conf/graph/ivector + uuid 가 보여야 정상) ==="
           ls -la app/src/main/assets/vosk-model-en/
 
       # 3. 빌드
