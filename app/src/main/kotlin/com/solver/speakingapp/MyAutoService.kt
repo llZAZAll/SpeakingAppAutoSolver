@@ -3,39 +3,31 @@ package com.solver.speakingapp
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
+import android.graphics.Bitmap
 import android.graphics.Path
 import android.graphics.PixelFormat
-import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
 import android.util.Log
+import android.view.Display
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
+import com.google.mlkit.vision.common.InputImage
+import com.google.mlkit.vision.text.TextRecognition
+import com.google.mlkit.vision.text.latin.TextRecognizerOptions
 
 class MyAutoService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
-    private var isTaskRunning = false
-    private var currentLoopCount = 0
-    private var nodeCount = 0
 
     private var windowManager: WindowManager? = null
     private var overlayTextView: TextView? = null
 
-    // 🎯 Z Fold 7 커버 스크린 전용 픽셀 좌표 (노드 방식으로 바꾸면 이건 안 써도 됨)
-    private val NEXT_BTN = Pair(800f, 2100f)
-
-    private val WORD_SLOTS = arrayOf(
-        Pair(240f, 1710f),
-        Pair(720f, 1710f),
-        Pair(240f, 1980f),
-        Pair(720f, 1980f)
-    )
+    private val ocrClient by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -43,7 +35,6 @@ class MyAutoService : AccessibilityService() {
         serviceInfo = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            // ✅ FLAG_RETRIEVE_INTERACTIVE_WINDOWS 추가 (이게 빠져서 root가 null로 나올 수 있었음)
             flags = AccessibilityServiceInfo.DEFAULT or
                 AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
                 AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
@@ -54,30 +45,24 @@ class MyAutoService : AccessibilityService() {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "🔍 진단 모드\n(볼륨[-] 트리 덤프 / 볼륨[+] 정지)"
+                text = "🔍 OCR 테스트 모드\n(볼륨[-] 화면 단어 읽기)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundColor(android.graphics.Color.parseColor("#EE000000"))
                 setPadding(30, 30, 30, 30)
             }
-
             val layoutType = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
             } else {
                 WindowManager.LayoutParams.TYPE_PHONE
             }
-
             val params = WindowManager.LayoutParams(
                 WindowManager.LayoutParams.MATCH_PARENT,
                 WindowManager.LayoutParams.WRAP_CONTENT,
                 layoutType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
-            ).apply {
-                gravity = Gravity.TOP
-                y = 120
-            }
-
+            ).apply { gravity = Gravity.TOP; y = 120 }
             windowManager?.addView(overlayTextView, params)
         } catch (e: Exception) {
             e.printStackTrace()
@@ -86,14 +71,11 @@ class MyAutoService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
-            // 진단: 살짝 지연 후 덤프 (키 이벤트 직후 root가 일시적으로 null인 경우 대비)
-            handler.postDelayed({ runDiagnostic() }, 150)
+            captureAndOcr()
             return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
-            isTaskRunning = false
-            handler.removeCallbacksAndMessages(null)
-            updateLog("🛑 [정지]")
+            updateLog("🛑 정지")
             return true
         }
         return super.onKeyEvent(event)
@@ -101,77 +83,68 @@ class MyAutoService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    // ===== 진단용 =====
-    private fun runDiagnostic() {
-        Log.d("TREE", "================ DUMP START ================")
-        val root = rootInActiveWindow
-        Log.d("TREE", "rootInActiveWindow == null ? -> ${root == null}")
-
-        val wins = windows
-        Log.d("TREE", "windows.size = ${wins?.size ?: -1}")
-        wins?.forEachIndexed { i, w ->
-            Log.d("TREE", "window[$i] type=${w.type} active=${w.isActive} pkg=${w.root?.packageName} childOfRoot=${w.root?.childCount}")
+    // ===== 2단계: 화면 캡처 + OCR =====
+    private fun captureAndOcr() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+            Log.e("OCR", "takeScreenshot은 Android 11+ 필요")
+            return
         }
-
-        if (root == null) {
-            Log.d("TREE", "root가 null -> 활성 window의 root로 재시도")
-            val active = wins?.firstOrNull { it.isActive }?.root
-            if (active != null) {
-                Log.d("TREE", "active window root pkg=${active.packageName} childCount=${active.childCount}")
-                nodeCount = 0
-                dumpTree(active)
-                Log.d("TREE", "total nodes = $nodeCount")
-            } else {
-                Log.d("TREE", "활성 window root도 없음")
+        updateLog("📸 화면 캡처 중...")
+        takeScreenshot(
+            Display.DEFAULT_DISPLAY,
+            applicationContext.mainExecutor,
+            object : TakeScreenshotCallback {
+                override fun onSuccess(screenshot: ScreenshotResult) {
+                    try {
+                        val hb = screenshot.hardwareBuffer
+                        val bmp = Bitmap.wrapHardwareBuffer(hb, screenshot.colorSpace)
+                        hb.close()
+                        if (bmp == null) { Log.e("OCR", "비트맵 변환 실패"); return }
+                        // HARDWARE 비트맵은 ML Kit에서 못 읽을 수 있어 소프트웨어 복사본 사용
+                        val sw = bmp.copy(Bitmap.Config.ARGB_8888, false)
+                        runOcr(sw)
+                    } catch (e: Exception) {
+                        Log.e("OCR", "캡처 처리 오류: ${e.message}")
+                    }
+                }
+                override fun onFailure(errorCode: Int) {
+                    Log.e("OCR", "스크린샷 실패 code=$errorCode (1초에 한 번만 가능)")
+                }
             }
-        } else {
-            Log.d("TREE", "root pkg=${root.packageName} childCount=${root.childCount}")
-            nodeCount = 0
-            dumpTree(root)
-            Log.d("TREE", "total nodes = $nodeCount")
-        }
-        Log.d("TREE", "================ DUMP END ================")
-    }
-
-    // 텍스트 유무와 상관없이 모든 노드를 찍음 (커스텀 렌더링 앱인지 판별 위해)
-    private fun dumpTree(node: AccessibilityNodeInfo?, depth: Int = 0) {
-        if (node == null) return
-        nodeCount++
-        val r = Rect()
-        node.getBoundsInScreen(r)
-        Log.d(
-            "TREE",
-            "  ".repeat(depth) +
-                "[${node.className}] text='${node.text}' desc='${node.contentDescription}' " +
-                "clickable=${node.isClickable} bounds=$r"
         )
-        for (i in 0 until node.childCount) dumpTree(node.getChild(i), depth + 1)
     }
 
-    // ===== (나중에 쓸) 좌표 난타 엔진 - 지금은 호출 안 함 =====
-    private fun executeAutoSequence() {
-        if (!isTaskRunning) return
-        currentLoopCount++
-        val totalTouches = 30
-        var delayAccumulator = 0L
-        val touchInterval = 50L
-        for (i in 0 until totalTouches) {
-            val spot = WORD_SLOTS[i % 4]
-            handler.postDelayed({ if (isTaskRunning) clickAt(spot.first, spot.second) }, delayAccumulator)
-            delayAccumulator += touchInterval
-        }
-        handler.postDelayed({
-            if (!isTaskRunning) return@postDelayed
-            clickAt(NEXT_BTN.first, NEXT_BTN.second)
-        }, delayAccumulator + 1000L)
-        handler.postDelayed({ if (isTaskRunning) executeAutoSequence() }, delayAccumulator + 5000L)
+    private fun runOcr(bmp: Bitmap) {
+        val image = InputImage.fromBitmap(bmp, 0)
+        ocrClient.process(image)
+            .addOnSuccessListener { result ->
+                Log.d("OCR", "===== OCR 결과 (화면 ${bmp.width}x${bmp.height}) =====")
+                var count = 0
+                for (block in result.textBlocks) {
+                    for (line in block.lines) {
+                        for (el in line.elements) {
+                            val b = el.boundingBox
+                            val cx = b?.centerX() ?: -1
+                            val cy = b?.centerY() ?: -1
+                            Log.d("OCR", "word='${el.text}' center=($cx,$cy) box=$b")
+                            count++
+                        }
+                    }
+                }
+                Log.d("OCR", "===== 총 단어 $count 개 =====")
+                updateLog("✅ OCR 완료: 단어 $count 개 (logcat 확인)")
+            }
+            .addOnFailureListener { e ->
+                Log.e("OCR", "OCR 실패: ${e.message}")
+                updateLog("❌ OCR 실패")
+            }
     }
 
     private fun clickAt(x: Float, y: Float) {
         val path = Path().apply { moveTo(x, y) }
         val stroke = GestureDescription.StrokeDescription(path, 0, 25)
-        val gestureBuilder = GestureDescription.Builder().apply { addStroke(stroke) }
-        dispatchGesture(gestureBuilder.build(), null, null)
+        val builder = GestureDescription.Builder().apply { addStroke(stroke) }
+        dispatchGesture(builder.build(), null, null)
     }
 
     private fun updateLog(message: String) {
@@ -183,7 +156,5 @@ class MyAutoService : AccessibilityService() {
         try { windowManager?.removeView(overlayTextView) } catch (e: Exception) {}
     }
 
-    override fun onInterrupt() {
-        isTaskRunning = false
-    }
+    override fun onInterrupt() {}
 }
