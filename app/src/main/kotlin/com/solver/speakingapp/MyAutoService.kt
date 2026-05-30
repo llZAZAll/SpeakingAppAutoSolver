@@ -5,13 +5,16 @@ import android.accessibilityservice.AccessibilityServiceInfo
 import android.accessibilityservice.GestureDescription
 import android.graphics.Path
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
 import android.os.Handler
 import android.os.Looper
+import android.util.Log
 import android.view.Gravity
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
 
 class MyAutoService : AccessibilityService() {
@@ -19,34 +22,39 @@ class MyAutoService : AccessibilityService() {
     private val handler = Handler(Looper.getMainLooper())
     private var isTaskRunning = false
     private var currentLoopCount = 0
-    
+    private var nodeCount = 0
+
     private var windowManager: WindowManager? = null
     private var overlayTextView: TextView? = null
 
-    // 🎯 Z Fold 7 커버 스크린 전용 픽셀 좌표
-    private val NEXT_BTN = Pair(800f, 2100f)   // 우측 하단 '다음 문제' 버튼 위치
-    
+    // 🎯 Z Fold 7 커버 스크린 전용 픽셀 좌표 (노드 방식으로 바꾸면 이건 안 써도 됨)
+    private val NEXT_BTN = Pair(800f, 2100f)
+
     private val WORD_SLOTS = arrayOf(
-        Pair(240f, 1710f), // 1번 슬롯 (좌상)
-        Pair(720f, 1710f), // 2번 슬롯 (우상)
-        Pair(240f, 1980f), // 3번 슬롯 (좌하)
-        Pair(720f, 1980f)  // 4번 슬롯 (우하)
+        Pair(240f, 1710f),
+        Pair(720f, 1710f),
+        Pair(240f, 1980f),
+        Pair(720f, 1980f)
     )
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        
+
         serviceInfo = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
-            flags = AccessibilityServiceInfo.DEFAULT or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
+            // ✅ FLAG_RETRIEVE_INTERACTIVE_WINDOWS 추가 (이게 빠져서 root가 null로 나올 수 있었음)
+            flags = AccessibilityServiceInfo.DEFAULT or
+                AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS or
+                AccessibilityServiceInfo.FLAG_RETRIEVE_INTERACTIVE_WINDOWS or
+                AccessibilityServiceInfo.FLAG_REQUEST_FILTER_KEY_EVENTS
             notificationTimeout = 500
         }
 
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "⚡ 1.5초 30연사 초고속 모드\n(볼륨[-] 시작 / 볼륨[+] 즉시종료)"
+                text = "🔍 진단 모드\n(볼륨[-] 트리 덤프 / 볼륨[+] 정지)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundColor(android.graphics.Color.parseColor("#EE000000"))
@@ -78,15 +86,14 @@ class MyAutoService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
-            android.util.Log.d("TREE", "================ DUMP START ================")
-            dumpTree(rootInActiveWindow)
-            android.util.Log.d("TREE", "================ DUMP END ================")
+            // 진단: 살짝 지연 후 덤프 (키 이벤트 직후 root가 일시적으로 null인 경우 대비)
+            handler.postDelayed({ runDiagnostic() }, 150)
             return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
             isTaskRunning = false
             handler.removeCallbacksAndMessages(null)
-            updateLog("🛑 [긴급 정지] 매크로가 즉시 종료되었습니다.")
+            updateLog("🛑 [정지]")
             return true
         }
         return super.onKeyEvent(event)
@@ -94,58 +101,75 @@ class MyAutoService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    // 🔄 1.5초 30연사 시퀀스 엔진
-    private fun executeAutoSequence() {
-        if (!isTaskRunning) return
+    // ===== 진단용 =====
+    private fun runDiagnostic() {
+        Log.d("TREE", "================ DUMP START ================")
+        val root = rootInActiveWindow
+        Log.d("TREE", "rootInActiveWindow == null ? -> ${root == null}")
 
-        currentLoopCount++
-        updateLog("⚡ 루프 [ $currentLoopCount 번째 문제 ] 30연사 폭격 중...")
-
-        // 💡 [변경 구역] 진입 즉시 1.5초 동안 정확히 30번 터치 제어
-        val totalTouches = 30
-        var delayAccumulator = 0L
-        val touchInterval = 50L // 50ms = 0.05초 간격
-
-        for (i in 0 until totalTouches) {
-            val spot = WORD_SLOTS[i % 4] // 0, 1, 2, 3번 슬롯을 계속 순환 구조로 터치
-            handler.postDelayed({
-                if (isTaskRunning) clickAt(spot.first, spot.second)
-            }, delayAccumulator)
-            delayAccumulator += touchInterval
+        val wins = windows
+        Log.d("TREE", "windows.size = ${wins?.size ?: -1}")
+        wins?.forEachIndexed { i, w ->
+            Log.d("TREE", "window[$i] type=${w.type} active=${w.isActive} pkg=${w.root?.packageName} childOfRoot=${w.root?.childCount}")
         }
 
-        // 단계 3. 30연타가 완전히 끝난 시점(1.5초 뒤)에 정확히 1초(1000ms) 더 쉬고 다음 문제 버튼 터치
+        if (root == null) {
+            Log.d("TREE", "root가 null -> 활성 window의 root로 재시도")
+            val active = wins?.firstOrNull { it.isActive }?.root
+            if (active != null) {
+                Log.d("TREE", "active window root pkg=${active.packageName} childCount=${active.childCount}")
+                nodeCount = 0
+                dumpTree(active)
+                Log.d("TREE", "total nodes = $nodeCount")
+            } else {
+                Log.d("TREE", "활성 window root도 없음")
+            }
+        } else {
+            Log.d("TREE", "root pkg=${root.packageName} childCount=${root.childCount}")
+            nodeCount = 0
+            dumpTree(root)
+            Log.d("TREE", "total nodes = $nodeCount")
+        }
+        Log.d("TREE", "================ DUMP END ================")
+    }
+
+    // 텍스트 유무와 상관없이 모든 노드를 찍음 (커스텀 렌더링 앱인지 판별 위해)
+    private fun dumpTree(node: AccessibilityNodeInfo?, depth: Int = 0) {
+        if (node == null) return
+        nodeCount++
+        val r = Rect()
+        node.getBoundsInScreen(r)
+        Log.d(
+            "TREE",
+            "  ".repeat(depth) +
+                "[${node.className}] text='${node.text}' desc='${node.contentDescription}' " +
+                "clickable=${node.isClickable} bounds=$r"
+        )
+        for (i in 0 until node.childCount) dumpTree(node.getChild(i), depth + 1)
+    }
+
+    // ===== (나중에 쓸) 좌표 난타 엔진 - 지금은 호출 안 함 =====
+    private fun executeAutoSequence() {
+        if (!isTaskRunning) return
+        currentLoopCount++
+        val totalTouches = 30
+        var delayAccumulator = 0L
+        val touchInterval = 50L
+        for (i in 0 until totalTouches) {
+            val spot = WORD_SLOTS[i % 4]
+            handler.postDelayed({ if (isTaskRunning) clickAt(spot.first, spot.second) }, delayAccumulator)
+            delayAccumulator += touchInterval
+        }
         handler.postDelayed({
             if (!isTaskRunning) return@postDelayed
-            updateLog("⏭️ [다음 문제] 버튼 터치 시도")
             clickAt(NEXT_BTN.first, NEXT_BTN.second)
         }, delayAccumulator + 1000L)
-
-        // 단계 4. 다음 문제 버튼을 누른 시점으로부터 정확히 '4초' 뒤에 다시 재귀 호출
-        // (delayAccumulator + 1000L) 상태에서 4000L을 더하므로 총 마진은 오차 없이 5000L이 유지됩니다.
-        handler.postDelayed({
-            if (isTaskRunning) {
-                executeAutoSequence()
-            }
-        }, delayAccumulator + 5000L) 
+        handler.postDelayed({ if (isTaskRunning) executeAutoSequence() }, delayAccumulator + 5000L)
     }
-
-    private fun dumpTree(node: android.view.accessibility.AccessibilityNodeInfo?, depth: Int = 0) {
-    if (node == null) return
-    val r = android.graphics.Rect()
-    node.getBoundsInScreen(r)
-    val text = node.text?.toString()
-    val desc = node.contentDescription?.toString()
-    if (!text.isNullOrBlank() || !desc.isNullOrBlank()) {
-        android.util.Log.d("TREE", "  ".repeat(depth) +
-            "[${node.className}] text='$text' desc='$desc' clickable=${node.isClickable} bounds=$r")
-    }
-    for (i in 0 until node.childCount) dumpTree(node.getChild(i), depth + 1)
-}
 
     private fun clickAt(x: Float, y: Float) {
         val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 25) // 초고속 연사를 위해 잔상 시간을 0.025초로 단축
+        val stroke = GestureDescription.StrokeDescription(path, 0, 25)
         val gestureBuilder = GestureDescription.Builder().apply { addStroke(stroke) }
         dispatchGesture(gestureBuilder.build(), null, null)
     }
