@@ -23,14 +23,14 @@ class MyAutoService : AccessibilityService() {
     private var windowManager: WindowManager? = null
     private var overlayTextView: TextView? = null
 
-    // 🎯 Z Fold 7 커버 스크린 전용 픽셀 좌표
+    // 🎯 [이미지 정밀 분석] Z 폴드 7 커버 스크린 최적화 안전 좌표
     private val NEXT_BTN = Pair(800f, 2100f)   // 우측 하단 '다음 문제' 버튼 위치
     
     private val WORD_SLOTS = arrayOf(
-        Pair(240f, 1710f), // 1번 슬롯 (좌상)
-        Pair(720f, 1710f), // 2번 슬롯 (우상)
-        Pair(240f, 1980f), // 3번 슬롯 (좌하)
-        Pair(720f, 1980f)  // 4번 슬롯 (우하)
+        Pair(240f, 1580f), // 1번 슬롯 (좌상 - 정중앙 타격)
+        Pair(720f, 1580f), // 2번 슬롯 (우상 - 정중앙 타격)
+        Pair(240f, 1790f), // 3번 슬롯 (좌하 - ✨북마크를 피하기 위해 타일 최상단 저격)
+        Pair(720f, 1790f)  // 4번 슬롯 (우하 - ✨북마크를 피하기 위해 타일 최상단 저격)
     )
 
     override fun onServiceConnected() {
@@ -46,7 +46,7 @@ class MyAutoService : AccessibilityService() {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "⚡ 맞춤형 무제한 루프 가동\n(볼륨[-] 시작 / 볼륨[+] 즉시종료)"
+                text = "⚡ 안전 좌표 무한 오토 봇\n(볼륨[-] 시작 / 볼륨[+] 즉시종료)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundColor(android.graphics.Color.parseColor("#EE000000"))
@@ -81,7 +81,7 @@ class MyAutoService : AccessibilityService() {
             if (!isTaskRunning) {
                 isTaskRunning = true
                 currentLoopCount = 0
-                updateLog("🚀 맞춤형 자동화 루프 가동 시작!")
+                updateLog("🚀 안전지대 초고속 연사 시작!")
                 executeAutoSequence()
             }
             return true
@@ -97,46 +97,44 @@ class MyAutoService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    // 🔄 변경된 맞춤형 무한 반복 시퀀스
+    // 🔄 정밀 조율된 무한 반복 시퀀스 엔지니어링
     private fun executeAutoSequence() {
         if (!isTaskRunning) return
 
         currentLoopCount++
-        updateLog("⚡ 루프 [ $currentLoopCount 번째 문제 ] 연사 중...")
+        updateLog("⚡ 루프 [ $currentLoopCount 번째 문제 ] 1.5초 30연타 가동")
 
-        // 단계 1 & 2. 진입 즉시 2초 동안 폭풍 난타 가동
-        val totalSpamLoops = 5 // 4개 슬롯 x 5바퀴 = 총 20번 터치
+        // [단계 1 & 2] 진입 즉시 1.5초 동안 정확히 30번 초고속 터치 (다시 듣기 완전 패스)
+        val totalTouches = 30
         var delayAccumulator = 0L
+        val touchInterval = 50L // 0.05초 주기로 다다다닥 터치
 
-        for (loop in 0 until totalSpamLoops) {
-            WORD_SLOTS.forEach { spot ->
-                handler.postDelayed({
-                    if (isTaskRunning) clickAt(spot.first, spot.second)
-                }, delayAccumulator)
-                // 터치 간격 0.1초(100L). 20번 터치 시 정확히 2초(2000ms) 소요
-                delayAccumulator += 100L 
-            }
+        for (i in 0 until totalTouches) {
+            val spot = WORD_SLOTS[i % 4]
+            handler.postDelayed({
+                if (isTaskRunning) clickAt(spot.first, spot.second)
+            }, delayAccumulator)
+            delayAccumulator += touchInterval
         }
 
-        // 단계 3. 난타가 끝난 직후(2초 뒤) 아주 약간의 마진(0.5초)을 두고 다음 문제 버튼 터치
+        // [단계 3] 30연타 폭격 종료 후, 정확히 1초(1000ms) 대기 후 다음 문제 버튼 터치
         handler.postDelayed({
             if (!isTaskRunning) return@postDelayed
             updateLog("⏭️ [다음 문제] 버튼 터치 시도")
             clickAt(NEXT_BTN.first, NEXT_BTN.second)
-        }, delayAccumulator + 500L)
+        }, delayAccumulator + 1000L)
 
-        // 단계 4. ✨ 다음 문제 버튼 누른 후 정확히 '4초' 뒤에 다음 문제 사이클로 자동 재귀 호출
-        // (delayAccumulator + 500L) 시점이 다음 버튼을 누른 시간이므로, 거기에 4000L(4초)을 더합니다.
+        // [단계 4] 다음 문제 버튼 누르고 폰이 완전히 로딩되도록 정확히 '4초' 대기 후 자동 재귀 호출
         handler.postDelayed({
             if (isTaskRunning) {
                 executeAutoSequence()
             }
-        }, delayAccumulator + 4500L) 
+        }, delayAccumulator + 5000L) // 단계3(1초) + 단계4(4초) = 총 5000L
     }
 
     private fun clickAt(x: Float, y: Float) {
         val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 30) // 0.03초 터치
+        val stroke = GestureDescription.StrokeDescription(path, 0, 25) 
         val gestureBuilder = GestureDescription.Builder().apply { addStroke(stroke) }
         dispatchGesture(gestureBuilder.build(), null, null)
     }
