@@ -35,4 +35,5 @@ dependencies {
     // 가장 가볍고 안정적인 기초 라이브러리만 지정합니다.
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
+    implementation 'com.alphacephei:vosk-android:0.3.47'
 }
