@@ -24,8 +24,7 @@ class MyAutoService : AccessibilityService() {
     private var overlayTextView: TextView? = null
 
     // 🎯 Z Fold 7 커버 스크린 전용 픽셀 좌표
-    private val LISTEN_BTN = Pair(480f, 2220f) // 하단 보라색 '다시 듣기'
-    private val NEXT_BTN = Pair(800f, 2100f)   // 우측 하단 '다음 문제'
+    private val NEXT_BTN = Pair(800f, 2100f)   // 우측 하단 '다음 문제' 버튼 위치
     
     private val WORD_SLOTS = arrayOf(
         Pair(240f, 1710f), // 1번 슬롯 (좌상)
@@ -47,10 +46,10 @@ class MyAutoService : AccessibilityService() {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "♾️ 무제한 무한 루프 모드\n(볼륨[-] 무한시작 / 볼륨[+] 즉시종료)"
+                text = "⚡ 초고속 무제한 루프 가동\n(볼륨[-] 시작 / 볼륨[+] 즉시종료)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
-                setBackgroundColor(android.graphics.Color.parseColor("#DD000000"))
+                setBackgroundColor(android.graphics.Color.parseColor("#EE000000"))
                 setPadding(30, 30, 30, 30)
             }
 
@@ -78,21 +77,19 @@ class MyAutoService : AccessibilityService() {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        // 볼륨[-] 누르면 무한 루프 시작
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
             if (!isTaskRunning) {
                 isTaskRunning = true
                 currentLoopCount = 0
-                updateLog("🚀 무한 자동화 루프 가동 시작!")
+                updateLog("🚀 초고속 자동화 루프 가동 시작!")
                 executeAutoSequence()
             }
             return true
         }
-        // 볼륨[+] 누르면 그 즉시 모든 타이머와 루프 파괴 (긴급 정지)
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
             isTaskRunning = false
-            handler.removeCallbacksAndMessages(null) // 대기 중인 모든 터치/루프 예약 작업 즉시 캔슬
-            updateLog("🛑 [긴급 정지] 모든 매크로 스케줄이 취소되었습니다.")
+            handler.removeCallbacksAndMessages(null) // 모든 예약 스케줄 전면 파괴
+            updateLog("🛑 [긴급 정지] 매크로가 즉시 종료되었습니다.")
             return true
         }
         return super.onKeyEvent(event)
@@ -100,53 +97,44 @@ class MyAutoService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    // 🔄 무한 반복되는 핵심 시퀀스 함수
+    // 🔄 변경된 초고속 무한 반복 시퀀스
     private fun executeAutoSequence() {
         if (!isTaskRunning) return
 
         currentLoopCount++
-        updateLog("🔄 무한 루프 [ $currentLoopCount 번째 문제 ] 진행 중...")
+        updateLog("⚡ 루프 [ $currentLoopCount 번째 문제 ] 초고속 연사 중...")
 
-        // 단계 1. 다시 듣기 버튼 클릭
-        clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
+        // 단계 1 & 2. 진입 즉시 4초 동안 폭풍 난타 가동 (다시 듣기 생략)
+        val totalSpamLoops = 10 // 4개 슬롯 x 10바퀴 = 총 40번 터치
+        var delayAccumulator = 0L
 
-        // 단계 2. 1.2초 대기 후 단어 슬롯 4칸 폭풍 난타 시작
+        for (loop in 0 until totalSpamLoops) {
+            WORD_SLOTS.forEach { spot ->
+                handler.postDelayed({
+                    if (isTaskRunning) clickAt(spot.first, spot.second)
+                }, delayAccumulator)
+                delayAccumulator += 100L // ✨ 터치 간격을 0.1초로 축소하여 40번 터치가 정확히 4초(4000ms) 내에 완료됨
+            }
+        }
+
+        // 단계 3. 난타가 끝난 직후(4초 뒤) 아주 약간의 마진(0.5초)을 두고 다음 문제 버튼 터치
         handler.postDelayed({
             if (!isTaskRunning) return@postDelayed
-            
-            val totalSpamLoops = 10 // 4칸을 10바퀴 (총 40번 터치)
-            var delayAccumulator = 0L
+            updateLog("⏭️ [다음 문제] 버튼 터치 시도")
+            clickAt(NEXT_BTN.first, NEXT_BTN.second)
+        }, delayAccumulator + 500L)
 
-            for (loop in 0 until totalSpamLoops) {
-                WORD_SLOTS.forEach { spot ->
-                    handler.postDelayed({
-                        if (isTaskRunning) clickAt(spot.first, spot.second)
-                    }, delayAccumulator)
-                    delayAccumulator += 140L // 0.14초의 무자비한 광클 간격
-                }
+        // 단계 4. ✨ 다음 문제 버튼 누른 후 정확히 2초 뒤에 다음 문제 사이클로 자동 재귀 호출
+        handler.postDelayed({
+            if (isTaskRunning) {
+                executeAutoSequence()
             }
-
-            // 단계 3. 모든 단어가 입력되고 성적표("Perfect!!!") 애니메이션이 끝날 때까지 대기 후 '다음 문제' 터치
-            // 난타 완료 시점(약 5.6초)에 2초를 더해 안정적으로 넥스트 버튼 유도
-            handler.postDelayed({
-                if (!isTaskRunning) return@postDelayed
-                updateLog("⏭️ 문제 풀이 완료 -> [다음 문제] 버튼 터치")
-                clickAt(NEXT_BTN.first, NEXT_BTN.second)
-            }, delayAccumulator + 2000L)
-
-            // 단계 4. 다음 문제 화면이 완전히 로딩되는 시간(3초) 대기 후, 스스로 다시 executeAutoSequence() 호출 (재귀 루프)
-            handler.postDelayed({
-                if (isTaskRunning) {
-                    executeAutoSequence() // ♾️ 방아쇠를 다시 당겨 다음 문제로 진입
-                }
-            }, delayAccumulator + 5000L)
-
-        }, 1200)
+        }, delayAccumulator + 2500L)
     }
 
     private fun clickAt(x: Float, y: Float) {
         val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 40) // 0.04초 스피드 터치
+        val stroke = GestureDescription.StrokeDescription(path, 0, 30) // 0.03초 초고속 터치 잔상
         val gestureBuilder = GestureDescription.Builder().apply { addStroke(stroke) }
         dispatchGesture(gestureBuilder.build(), null, null)
     }
