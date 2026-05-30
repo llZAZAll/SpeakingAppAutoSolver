@@ -2,6 +2,8 @@ package com.solver.speakingapp
 
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.AccessibilityServiceInfo
+import android.accessibilityservice.GestureDescription
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.os.Build
 import android.os.Handler
@@ -10,7 +12,6 @@ import android.view.Gravity
 import android.view.KeyEvent
 import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
-import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
 
 class MyAutoService : AccessibilityService() {
@@ -20,6 +21,19 @@ class MyAutoService : AccessibilityService() {
     
     private var windowManager: WindowManager? = null
     private var overlayTextView: TextView? = null
+
+    // 💡 [설정] 본인 스마트폰 해상도에 맞는 실제 X, Y 좌표값으로 수정이 필요합니다.
+    // 아래 수치는 일반적인 1080 x 2400 해상도 스마트폰 기준 대략적인 예시 위치입니다.
+    private val LISTEN_BUTTON_X = 540f   // 다시 듣기 버튼 (화면 가로 중앙)
+    private val LISTEN_BUTTON_Y = 1950f  // 다시 듣기 버튼 (화면 하단 보라색 버튼 위치)
+
+    // 화면 하단에 배치된 단어 조각들의 예상 좌표 목록 (4개 배치 기준 예시)
+    private val WORD_SPOTS = arrayOf(
+        Pair(220f, 1600f),  // 1번째 단어 위치
+        Pair(430f, 1600f),  // 2번째 단어 위치
+        Pair(650f, 1600f),  // 3번째 단어 위치
+        Pair(860f, 1600f)   // 4번째 단어 위치
+    )
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -34,10 +48,10 @@ class MyAutoService : AccessibilityService() {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "🤖 딥스캔 대기 중...\n(영어 앱 켜고 볼륨[-] 누르기)"
+                text = "🎯 절대 좌표 터치 모드 가동\n(영어 앱 켜고 볼륨[-] 누르기)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
-                setBackgroundColor(android.graphics.Color.parseColor("#CC000000")) // 조금 더 진하게
+                setBackgroundColor(android.graphics.Color.parseColor("#CC000000"))
                 setPadding(30, 30, 30, 30)
             }
 
@@ -55,7 +69,7 @@ class MyAutoService : AccessibilityService() {
                 PixelFormat.TRANSLUCENT
             ).apply {
                 gravity = Gravity.TOP
-                y = 120 
+                y = 120
             }
 
             windowManager?.addView(overlayTextView, params)
@@ -67,104 +81,52 @@ class MyAutoService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
             if (!isTaskRunning) {
-                updateLog("🔍 볼륨 신호 감지! 모든 텍스트 딥스캔 시작...")
-                forceDeepScanAndClick()
+                updateLog("🚀 지정된 X, Y 좌표로 강제 터치 신호 주입 시작...")
+                simulateCoordinateClicks()
             }
-            return true 
+            return true
         }
         return super.onKeyEvent(event)
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    // 💡 [핵심] 클릭 여부 무시하고 화면의 모든 요소를 싹 다 가져옵니다.
-    private fun forceDeepScanAndClick() {
-        val rootNode = rootInActiveWindow
-        if (rootNode == null) {
-            updateLog("❌ 에러: 화면을 전혀 읽을 수 없습니다 (유니티 엔진 등 보안 락)")
-            return
-        }
-
+    private fun simulateCoordinateClicks() {
         isTaskRunning = true
-        val allNodes = mutableListOf<AccessibilityNodeInfo>()
-        findAllNodes(rootNode, allNodes) // 클릭 필터 제거하고 무조건 수집
 
-        // 텍스트가 존재하는 노드만 추출
-        val textNodes = allNodes.filter { it.text != null && it.text.toString().isNotBlank() }
+        // 1. 다시 듣기 버튼 위치 강제 터치
+        clickAt(LISTEN_BUTTON_X, LISTEN_BUTTON_Y)
+        updateLog("🔊 다시 듣기 터치 주입 (X:$LISTEN_BUTTON_X, Y:$LISTEN_BUTTON_Y)")
 
-        if (textNodes.isEmpty()) {
-            updateLog("❌ 에러: 화면에 텍스트 데이터가 0개입니다. (그림으로 처리됨)")
-            isTaskRunning = false
-            return
-        }
-
-        // 1. 순수 영단어(2글자 이상) 노드 찾기
-        val wordNodes = textNodes.filter { 
-            it.text.toString().matches(Regex("^[a-zA-Z]{2,}$")) 
-        }
-
-        updateLog("📊 딥스캔 완료\n- 전체 텍스트 조각: ${textNodes.size}개\n- 매칭된 영어 단어: ${wordNodes.size}개")
-
-        if (wordNodes.isEmpty()) {
-            updateLog("⚠️ 영어 단어를 찾지 못했습니다. 텍스트 추출 목록:\n${textNodes.take(3).joinToString { it.text.toString() }}...")
-            isTaskRunning = false
-            return
-        }
-
-        // 2. 다시 듣기 버튼 찾기 (영어 단어가 아닌 것 중 가장 밑에 있는 것)
-        val listenButton = textNodes.lastOrNull { 
-            !it.text.toString().matches(Regex("^[a-zA-Z]+$")) 
-        }
-
-        if (listenButton != null) {
-            forceClick(listenButton)
-            updateLog("🔊 하단 텍스트 [${listenButton.text}] 강제 터치 완료")
-        }
-
-        // 3. 소리 재생 후 단어 터치
+        // 2. 오디오 재생 동기화 대기 후(2.5초) 단어 영역 순차 터치
         handler.postDelayed({
-            val sortedWords = wordNodes.sortedBy { it.text.toString().lowercase() }
+            updateLog("🔤 단어 슬롯 좌표 ${WORD_SPOTS.size}개 매크로 가동")
             
-            updateLog("🔤 단어 ${sortedWords.size}개 강제 터치 시작")
-            sortedWords.forEachIndexed { index, node ->
+            WORD_SPOTS.forEachIndexed { index, spot ->
                 handler.postDelayed({
-                    forceClick(node)
-                    updateLog("👆 타겟 강제 터치: [${node.text}]")
-                }, (index + 1) * 400L)
+                    clickAt(spot.first, spot.second)
+                    updateLog("👆 [순서 ${index + 1}] 터치 완료 (X:${spot.first}, Y:${spot.second})")
+                }, (index + 1) * 400L) // 0.4초 간격 터치
             }
 
             handler.postDelayed({
                 isTaskRunning = false
-                updateLog("✅ 시퀀스 종료. 다음 문제에서 볼륨[-]을 누르세요.")
-            }, (sortedWords.size + 1) * 400L + 1200L)
+                updateLog("✅ 좌표 시퀀스 완료. 다음 문제에서 볼륨[-]을 누르세요.")
+            }, (WORD_SPOTS.size + 1) * 400L + 1000L)
 
         }, 2500)
     }
 
-    // 화면의 모든 노드를 무조건 긁어모으는 함수
-    private fun findAllNodes(node: AccessibilityNodeInfo?, list: MutableList<AccessibilityNodeInfo>) {
-        if (node == null) return
-        list.add(node)
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i)
-            if (child != null) {
-                findAllNodes(child, list)
-            }
+    // 💡 안드로이드 시스템에 좌표 신호를 다이렉트로 찔러넣는 핵심 함수
+    private fun clickAt(x: Float, y: Float) {
+        val path = Path().apply {
+            moveTo(x, y)
         }
-    }
-
-    // 💡 [핵심] 자신이 클릭 안 되면, 클릭 가능한 부모(배경 패널)를 찾을 때까지 거슬러 올라가서 터치하는 강력한 함수
-    private fun forceClick(node: AccessibilityNodeInfo) {
-        var current: AccessibilityNodeInfo? = node
-        while (current != null) {
-            if (current.isClickable) {
-                current.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                return
-            }
-            current = current.parent
+        val stroke = GestureDescription.StrokeDescription(path, 0, 100)
+        val gestureBuilder = GestureDescription.Builder().apply {
+            addStroke(stroke)
         }
-        // 부모도 클릭 불가능하면 그냥 자신에게 터치 신호를 구겨 넣음
-        node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+        dispatchGesture(gestureBuilder.build(), null, null)
     }
 
     private fun updateLog(message: String) {
