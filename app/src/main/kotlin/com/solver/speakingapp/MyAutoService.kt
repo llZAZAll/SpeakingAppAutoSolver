@@ -18,24 +18,21 @@ class MyAutoService : AccessibilityService() {
 
     private val handler = Handler(Looper.getMainLooper())
     private var isTaskRunning = false
+    private var currentLoopCount = 0
     
     private var windowManager: WindowManager? = null
     private var overlayTextView: TextView? = null
 
-    // 🎯 [Z Fold 7 커버 스크린 전용 좌표]
-    // 1. 문제 화면 좌표
-    private val LISTEN_BTN = Pair(480f, 2220f) // 하단 보라색 '다시 듣기' 정중앙
+    // 🎯 Z Fold 7 커버 스크린 전용 픽셀 좌표
+    private val LISTEN_BTN = Pair(480f, 2220f) // 하단 보라색 '다시 듣기'
+    private val NEXT_BTN = Pair(800f, 2100f)   // 우측 하단 '다음 문제'
     
-    // 2x2 단어 슬롯 4개의 고정 좌표 (빈자리에 새 단어가 나와도 무조건 이 4곳만 팹니다)
     private val WORD_SLOTS = arrayOf(
-        Pair(240f, 1710f), // 1번 슬롯 (좌측 상단, 예: what)
-        Pair(720f, 1710f), // 2번 슬롯 (우측 상단, 예: is)
-        Pair(240f, 1980f), // 3번 슬롯 (좌측 하단, 예: time)
-        Pair(720f, 1980f)  // 4번 슬롯 (우측 하단, 예: it)
+        Pair(240f, 1710f), // 1번 슬롯 (좌상)
+        Pair(720f, 1710f), // 2번 슬롯 (우상)
+        Pair(240f, 1980f), // 3번 슬롯 (좌하)
+        Pair(720f, 1980f)  // 4번 슬롯 (우하)
     )
-
-    // 2. 성공 화면 좌표
-    private val NEXT_BTN = Pair(800f, 2100f) // 우측 하단 '다음 문제' 버튼 정중앙
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -50,10 +47,10 @@ class MyAutoService : AccessibilityService() {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "🤖 Z폴드 오토 봇 대기중\n(볼륨[-] 시작 / 볼륨[+] 강제중지)"
+                text = "♾️ 무제한 무한 루프 모드\n(볼륨[-] 무한시작 / 볼륨[+] 즉시종료)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
-                setBackgroundColor(android.graphics.Color.parseColor("#CC000000"))
+                setBackgroundColor(android.graphics.Color.parseColor("#DD000000"))
                 setPadding(30, 30, 30, 30)
             }
 
@@ -81,19 +78,21 @@ class MyAutoService : AccessibilityService() {
     }
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
-        // 볼륨[-] 누르면 시작
+        // 볼륨[-] 누르면 무한 루프 시작
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
             if (!isTaskRunning) {
-                updateLog("🚀 매크로 시작! (기관총 터치 가동)")
-                startAutoBot()
+                isTaskRunning = true
+                currentLoopCount = 0
+                updateLog("🚀 무한 자동화 루프 가동 시작!")
+                executeAutoSequence()
             }
             return true
         }
-        // 볼륨[+] 누르면 긴급 정지
+        // 볼륨[+] 누르면 그 즉시 모든 타이머와 루프 파괴 (긴급 정지)
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
             isTaskRunning = false
-            handler.removeCallbacksAndMessages(null)
-            updateLog("🛑 매크로 긴급 정지됨")
+            handler.removeCallbacksAndMessages(null) // 대기 중인 모든 터치/루프 예약 작업 즉시 캔슬
+            updateLog("🛑 [긴급 정지] 모든 매크로 스케줄이 취소되었습니다.")
             return true
         }
         return super.onKeyEvent(event)
@@ -101,52 +100,53 @@ class MyAutoService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    private fun startAutoBot() {
-        isTaskRunning = true
-        
-        // 1. 다시 듣기 터치
-        clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
-        updateLog("🔊 다시 듣기 클릭")
+    // 🔄 무한 반복되는 핵심 시퀀스 함수
+    private fun executeAutoSequence() {
+        if (!isTaskRunning) return
 
-        // 2. 1.5초 뒤부터 단어 4칸을 무차별 스캔(터치) 시작
+        currentLoopCount++
+        updateLog("🔄 무한 루프 [ $currentLoopCount 번째 문제 ] 진행 중...")
+
+        // 단계 1. 다시 듣기 버튼 클릭
+        clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
+
+        // 단계 2. 1.2초 대기 후 단어 슬롯 4칸 폭풍 난타 시작
         handler.postDelayed({
-            updateLog("⚔️ 4칸 슬롯 무차별 타격 중...")
+            if (!isTaskRunning) return@postDelayed
             
-            // 8단어 이상이 나와도 충분히 다 누를 수 있도록 4칸을 10바퀴(총 40번) 미친듯이 돕니다.
-            val totalSpamLoops = 10 
+            val totalSpamLoops = 10 // 4칸을 10바퀴 (총 40번 터치)
             var delayAccumulator = 0L
 
             for (loop in 0 until totalSpamLoops) {
-                WORD_SLOTS.forEachIndexed { index, spot ->
+                WORD_SLOTS.forEach { spot ->
                     handler.postDelayed({
-                        if(isTaskRunning) clickAt(spot.first, spot.second)
+                        if (isTaskRunning) clickAt(spot.first, spot.second)
                     }, delayAccumulator)
-                    delayAccumulator += 150L // 0.15초 간격으로 터치
+                    delayAccumulator += 140L // 0.14초의 무자비한 광클 간격
                 }
             }
 
-            // 3. 문제 풀이가 끝날 때까지 넉넉히 대기 후 '다음 문제' 터치
+            // 단계 3. 모든 단어가 입력되고 성적표("Perfect!!!") 애니메이션이 끝날 때까지 대기 후 '다음 문제' 터치
+            // 난타 완료 시점(약 5.6초)에 2초를 더해 안정적으로 넥스트 버튼 유도
             handler.postDelayed({
-                if(isTaskRunning) {
-                    updateLog("⏭️ 다음 문제 버튼 터치")
-                    clickAt(NEXT_BTN.first, NEXT_BTN.second)
-                }
-            }, delayAccumulator + 1500L)
+                if (!isTaskRunning) return@postDelayed
+                updateLog("⏭️ 문제 풀이 완료 -> [다음 문제] 버튼 터치")
+                clickAt(NEXT_BTN.first, NEXT_BTN.second)
+            }, delayAccumulator + 2000L)
 
-            // 4. 다음 문제로 넘어간 뒤 다시 초기화 및 루프 준비
+            // 단계 4. 다음 문제 화면이 완전히 로딩되는 시간(3초) 대기 후, 스스로 다시 executeAutoSequence() 호출 (재귀 루프)
             handler.postDelayed({
-                if(isTaskRunning) {
-                    updateLog("✅ 사이클 완료. 계속하려면 볼륨[-]을 누르세요.")
-                    isTaskRunning = false
+                if (isTaskRunning) {
+                    executeAutoSequence() // ♾️ 방아쇠를 다시 당겨 다음 문제로 진입
                 }
-            }, delayAccumulator + 3000L)
+            }, delayAccumulator + 5000L)
 
-        }, 1500)
+        }, 1200)
     }
 
     private fun clickAt(x: Float, y: Float) {
         val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 50) // 0.05초의 매우 짧은 터치
+        val stroke = GestureDescription.StrokeDescription(path, 0, 40) // 0.04초 스피드 터치
         val gestureBuilder = GestureDescription.Builder().apply { addStroke(stroke) }
         dispatchGesture(gestureBuilder.build(), null, null)
     }
