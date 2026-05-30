@@ -78,12 +78,9 @@ class MyAutoService : AccessibilityService() {
 
     override fun onKeyEvent(event: KeyEvent): Boolean {
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
-            if (!isTaskRunning) {
-                isTaskRunning = true
-                currentLoopCount = 0
-                updateLog("🚀 30연사 초고속 루프 시작!")
-                executeAutoSequence()
-            }
+            android.util.Log.d("TREE", "================ DUMP START ================")
+            dumpTree(rootInActiveWindow)
+            android.util.Log.d("TREE", "================ DUMP END ================")
             return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
@@ -132,6 +129,19 @@ class MyAutoService : AccessibilityService() {
             }
         }, delayAccumulator + 5000L) 
     }
+
+    private fun dumpTree(node: android.view.accessibility.AccessibilityNodeInfo?, depth: Int = 0) {
+    if (node == null) return
+    val r = android.graphics.Rect()
+    node.getBoundsInScreen(r)
+    val text = node.text?.toString()
+    val desc = node.contentDescription?.toString()
+    if (!text.isNullOrBlank() || !desc.isNullOrBlank()) {
+        android.util.Log.d("TREE", "  ".repeat(depth) +
+            "[${node.className}] text='$text' desc='$desc' clickable=${node.isClickable} bounds=$r")
+    }
+    for (i in 0 until node.childCount) dumpTree(node.getChild(i), depth + 1)
+}
 
     private fun clickAt(x: Float, y: Float) {
         val path = Path().apply { moveTo(x, y) }
