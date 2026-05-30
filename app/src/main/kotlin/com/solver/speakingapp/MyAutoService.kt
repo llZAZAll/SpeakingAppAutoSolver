@@ -41,7 +41,7 @@ class MyAutoService : AccessibilityService() {
     private val bandTop = 1640
     private val bandBottom = 2140
     private val snapRadius = 300f
-    private val NEXT_BTN = Pair(900f, 2370f)
+    private val NEXT_BTN = Pair(900f, 2100f)
 
     private val stepDelay = 1200L
     private val pollDelay = 1200L
@@ -58,6 +58,7 @@ class MyAutoService : AccessibilityService() {
     private var retryAtSameStep = 0
     private var captureRetry = 0
     private var target: List<String> = emptyList()
+    private var currentLoopCount = 0 // 무한 루프 카운트 변수 활성화
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -73,7 +74,7 @@ class MyAutoService : AccessibilityService() {
             }
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "🤖 풀이 모드\n(볼륨[-] 한 문제 / 볼륨[+] 중단)"
+                text = "🤖 무한 풀이 모드\n(볼륨[-] 시작 / 볼륨[+] 중단)"
                 textSize = 13f
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundColor(android.graphics.Color.parseColor("#EE000000"))
@@ -96,12 +97,17 @@ class MyAutoService : AccessibilityService() {
     override fun onKeyEvent(event: KeyEvent): Boolean {
         try {
             if (event.keyCode == KeyEvent.KEYCODE_VOLUME_DOWN && event.action == KeyEvent.ACTION_DOWN) {
-                startSolve(); return true
+                if (!solving) {
+                    currentLoopCount = 0
+                    startSolve()
+                }
+                return true
             }
             if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
                 solving = false
                 handler.removeCallbacksAndMessages(null)
-                updateLog("🛑 중단됨"); return true
+                updateLog("🛑 중단됨")
+                return true
             }
         } catch (t: Throwable) { Log.e("SOLVE", "onKeyEvent 예외", t); return true }
         return super.onKeyEvent(event)
@@ -110,7 +116,6 @@ class MyAutoService : AccessibilityService() {
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
     private fun startSolve() {
-        if (solving) { updateLog("이미 풀이 중..."); return }
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) { Log.e("SOLVE", "Android 11+ 필요"); return }
         solving = true; retryAtSameStep = 0; captureRetry = 0
         updateLog("⏳ 카드 대기 중...")
@@ -138,12 +143,28 @@ class MyAutoService : AccessibilityService() {
 
     private fun solveStep(p: Int) {
         if (!solving) return
+        
+        // 💡 [핵심 변경점] 정답을 다 맞춘 후 루프 처리
         if (p >= target.size) {
-            updateLog("✅ 완료 → 다음 문제")
+            currentLoopCount++
+            updateLog("✅ [$currentLoopCount] 완료 → 다음 문제 진입")
             Log.d("SOLVE", "완료, NEXT 탭")
-            handler.postDelayed({ clickAt(NEXT_BTN.first, NEXT_BTN.second); solving = false }, 900)
+            handler.postDelayed({
+                if (solving) clickAt(NEXT_BTN.first, NEXT_BTN.second)
+                
+                // 다음 문제 버튼을 누르고 화면이 완전히 넘어갈 때까지 대기(약 3.5초) 후 재시작
+                handler.postDelayed({
+                    if (solving) {
+                        retryAtSameStep = 0
+                        captureRetry = 0
+                        updateLog("⏳ 새 문제 대기 중...")
+                        waitForCards(0) // 무한 루프 재장전!
+                    }
+                }, 3500L) 
+            }, 900)
             return
         }
+        
         captureThen { result, bmp ->
             if (!solving) return@captureThen
             val slotWord = extractSlotWords(result)
