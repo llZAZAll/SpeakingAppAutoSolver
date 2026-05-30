@@ -46,7 +46,7 @@ class MyAutoService : AccessibilityService() {
         try {
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "⚡ 초고속 무제한 루프 가동\n(볼륨[-] 시작 / 볼륨[+] 즉시종료)"
+                text = "⚡ 맞춤형 무제한 루프 가동\n(볼륨[-] 시작 / 볼륨[+] 즉시종료)"
                 textSize = 14f
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundColor(android.graphics.Color.parseColor("#EE000000"))
@@ -81,14 +81,14 @@ class MyAutoService : AccessibilityService() {
             if (!isTaskRunning) {
                 isTaskRunning = true
                 currentLoopCount = 0
-                updateLog("🚀 초고속 자동화 루프 가동 시작!")
+                updateLog("🚀 맞춤형 자동화 루프 가동 시작!")
                 executeAutoSequence()
             }
             return true
         }
         if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
             isTaskRunning = false
-            handler.removeCallbacksAndMessages(null) // 모든 예약 스케줄 전면 파괴
+            handler.removeCallbacksAndMessages(null)
             updateLog("🛑 [긴급 정지] 매크로가 즉시 종료되었습니다.")
             return true
         }
@@ -97,15 +97,15 @@ class MyAutoService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
 
-    // 🔄 변경된 초고속 무한 반복 시퀀스
+    // 🔄 변경된 맞춤형 무한 반복 시퀀스
     private fun executeAutoSequence() {
         if (!isTaskRunning) return
 
         currentLoopCount++
-        updateLog("⚡ 루프 [ $currentLoopCount 번째 문제 ] 초고속 연사 중...")
+        updateLog("⚡ 루프 [ $currentLoopCount 번째 문제 ] 연사 중...")
 
-        // 단계 1 & 2. 진입 즉시 4초 동안 폭풍 난타 가동 (다시 듣기 생략)
-        val totalSpamLoops = 10 // 4개 슬롯 x 10바퀴 = 총 40번 터치
+        // 단계 1 & 2. 진입 즉시 2초 동안 폭풍 난타 가동
+        val totalSpamLoops = 5 // 4개 슬롯 x 5바퀴 = 총 20번 터치
         var delayAccumulator = 0L
 
         for (loop in 0 until totalSpamLoops) {
@@ -113,28 +113,30 @@ class MyAutoService : AccessibilityService() {
                 handler.postDelayed({
                     if (isTaskRunning) clickAt(spot.first, spot.second)
                 }, delayAccumulator)
-                delayAccumulator += 100L // ✨ 터치 간격을 0.1초로 축소하여 40번 터치가 정확히 4초(4000ms) 내에 완료됨
+                // 터치 간격 0.1초(100L). 20번 터치 시 정확히 2초(2000ms) 소요
+                delayAccumulator += 100L 
             }
         }
 
-        // 단계 3. 난타가 끝난 직후(4초 뒤) 아주 약간의 마진(0.5초)을 두고 다음 문제 버튼 터치
+        // 단계 3. 난타가 끝난 직후(2초 뒤) 아주 약간의 마진(0.5초)을 두고 다음 문제 버튼 터치
         handler.postDelayed({
             if (!isTaskRunning) return@postDelayed
             updateLog("⏭️ [다음 문제] 버튼 터치 시도")
             clickAt(NEXT_BTN.first, NEXT_BTN.second)
         }, delayAccumulator + 500L)
 
-        // 단계 4. ✨ 다음 문제 버튼 누른 후 정확히 2초 뒤에 다음 문제 사이클로 자동 재귀 호출
+        // 단계 4. ✨ 다음 문제 버튼 누른 후 정확히 '4초' 뒤에 다음 문제 사이클로 자동 재귀 호출
+        // (delayAccumulator + 500L) 시점이 다음 버튼을 누른 시간이므로, 거기에 4000L(4초)을 더합니다.
         handler.postDelayed({
             if (isTaskRunning) {
                 executeAutoSequence()
             }
-        }, delayAccumulator + 2500L)
+        }, delayAccumulator + 4500L) 
     }
 
     private fun clickAt(x: Float, y: Float) {
         val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, 30) // 0.03초 초고속 터치 잔상
+        val stroke = GestureDescription.StrokeDescription(path, 0, 30) // 0.03초 터치
         val gestureBuilder = GestureDescription.Builder().apply { addStroke(stroke) }
         dispatchGesture(gestureBuilder.build(), null, null)
     }
