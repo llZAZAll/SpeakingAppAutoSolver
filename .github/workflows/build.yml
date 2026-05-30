@@ -18,14 +18,16 @@ jobs:
           distribution: 'temurin'
           cache: gradle
 
-      # ✨ [추가] gradle-wrapper.jar 부품이 없을 때 자동으로 다운로드하여 생성하는 명령
       - name: Download Gradle Wrapper JAR
         run: |
           mkdir -p gradle/wrapper
           curl -L -o gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar
 
-      - name: Grant execute permission for gradlew
-        run: chmod +x gradlew
+      # ✨ [수정] gradlew 뿐만 아니라 다운로드한 jar 파일에도 실행 권한을 함께 부여합니다.
+      - name: Grant execute permission for graduation tools
+        run: |
+          chmod +x gradlew
+          chmod +x gradle/wrapper/gradle-wrapper.jar
 
       - name: Build with Gradle
         run: ./gradlew assembleDebug
