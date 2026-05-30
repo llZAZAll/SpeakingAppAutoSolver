@@ -43,7 +43,8 @@ class MainActivity : AppCompatActivity() {
         val btnOverlay = Button(this).apply {
             text = "[2] 다른 앱 위에 그리기 권한 허용"
             setOnClickListener {
-                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES_M) {
+                // 💡 수정된 부분: VERSION_CODES.M 으로 마침표를 찍었습니다.
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
                     if (!Settings.canDrawOverlays(this@MainActivity)) {
                         val intent = Intent(
                             Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
