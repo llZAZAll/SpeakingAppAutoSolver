@@ -20,8 +20,7 @@ android {
             minifyEnabled false
         }
     }
-    
-    // 컴파일 시 자바와 코틀린의 버전을 17로 일치시킵니다.
+
     compileOptions {
         sourceCompatibility JavaVersion.VERSION_17
         targetCompatibility JavaVersion.VERSION_17
@@ -32,8 +31,8 @@ android {
 }
 
 dependencies {
-    // 가장 가볍고 안정적인 기초 라이브러리만 지정합니다.
     implementation 'androidx.core:core-ktx:1.12.0'
     implementation 'androidx.appcompat:appcompat:1.6.1'
-    implementation 'com.alphacephei:vosk-android:0.3.47'
+    implementation 'com.alphacephei:vosk-android:0.3.47'        // 오프라인 음성인식(STT)
+    implementation 'com.google.mlkit:text-recognition:16.0.0'   // 온디바이스 OCR
 }
