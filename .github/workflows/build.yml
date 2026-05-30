@@ -9,14 +9,20 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4 # v3에서 v4로 업데이트
+      - uses: actions/checkout@v4
 
       - name: set up JDK 17
-        uses: actions/setup-java@v4 # v3에서 v4로 업데이트
+        uses: actions/setup-java@v4
         with:
           java-version: '17'
           distribution: 'temurin'
           cache: gradle
+
+      # ✨ [추가] gradle-wrapper.jar 부품이 없을 때 자동으로 다운로드하여 생성하는 명령
+      - name: Download Gradle Wrapper JAR
+        run: |
+          mkdir -p gradle/wrapper
+          curl -L -o gradle/wrapper/gradle-wrapper.jar https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar
 
       - name: Grant execute permission for gradlew
         run: chmod +x gradlew
@@ -25,7 +31,7 @@ jobs:
         run: ./gradlew assembleDebug
 
       - name: Upload APK artifacts
-        uses: actions/upload-artifact@v4 # ❌ 이 부분이 v3여서 에러가 났던 것입니다. v4로 변경!
+        uses: actions/upload-artifact@v4
         with:
           name: app-debug
           path: app/build/outputs/apk/debug/app-debug.apk
