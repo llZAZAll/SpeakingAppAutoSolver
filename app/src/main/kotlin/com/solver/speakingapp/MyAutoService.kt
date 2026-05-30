@@ -15,77 +15,82 @@ class MyAutoService : AccessibilityService() {
 
     override fun onServiceConnected() {
         super.onServiceConnected()
-        // 서비스가 완벽하게 켜지면 화면에 알림을 띄웁니다!
-        showToast("매크로 서비스가 가동되었습니다!")
+        showToast("🔥 무조건 터치 모드 가동!")
         
-        val info = AccessibilityServiceInfo().apply {
+        serviceInfo = AccessibilityServiceInfo().apply {
             eventTypes = AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED or AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED
             feedbackType = AccessibilityServiceInfo.FEEDBACK_GENERIC
             flags = AccessibilityServiceInfo.DEFAULT or AccessibilityServiceInfo.FLAG_INCLUDE_NOT_IMPORTANT_VIEWS
-            notificationTimeout = 300
+            notificationTimeout = 500
         }
-        serviceInfo = info
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
         if (event == null || isTaskRunning) return
         val rootNode = rootInActiveWindow ?: return
 
-        // 화면에서 "다시 듣기" 버튼 탐색
-        val listenButtons = rootNode.findAccessibilityNodeInfosByText("다시 듣기")
-        
-        if (!listenButtons.isNullOrEmpty()) {
-            showToast("영어 문제 화면 감지! 매크로 시작")
-            startSolvingRoutine(listenButtons[0], rootNode)
-        }
-    }
+        // [핵심 변경] 화면 전체에서 "클릭 가능한 모든 버튼"을 강제로 수집합니다.
+        val clickableNodes = mutableListOf<AccessibilityNodeInfo>()
+        findAllClickableNodes(rootNode, clickableNodes)
 
-    private fun startSolvingRoutine(listenButtonNode: AccessibilityNodeInfo, rootNode: AccessibilityNodeInfo) {
-        isTaskRunning = true
-        
-        // 1. 다시 듣기 클릭
-        if (listenButtonNode.isClickable) {
-            listenButtonNode.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-            showToast("🔊 다시 듣기 버튼을 자동으로 눌렀습니다.")
-        }
+        // 화면에 클릭 가능한 요소가 최소 5개 이상 있을 때만 작동 (상단 바 버튼 + 단어들)
+        if (clickableNodes.size >= 5) {
+            
+            // 영어 단어 조각들만 필터링 (텍스트가 2자 이상 영문인 것들)
+            val wordNodes = clickableNodes.filter { 
+                it.text != null && it.text.toString().matches(Regex("^[a-zA-Z]{2,}$")) 
+            }
 
-        // 2. 소리 재생 대기 (2초 뒤 단어 터치)
-        handler.postDelayed({
-            val allNodes = rootNode.findAccessibilityNodeInfosByText("") ?: return@postDelayed
-            val wordNodes = mutableListOf<AccessibilityNodeInfo>()
-
-            for (node in allNodes) {
-                if (node.isClickable && node.text != null && node.text.toString().matches(Regex("^[a-zA-Z]+$"))) {
-                    wordNodes.add(node)
+            // 화면에 영어 단어가 4개쯤 보인다면 퀴즈 화면으로 확신!
+            if (wordNodes.size >= 3) {
+                isTaskRunning = true
+                showToast("🎯 퀴즈 화면 포착! 매크로 구동")
+                
+                // 1. [다시 듣기] 버튼 찾기: 보통 영어 단어들 바로 근처나 화면 맨 아래에 있습니다.
+                // 영어 단어가 아닌 클릭 가능 버튼 중 가장 하단에 있는 것을 '다시 듣기'로 추정합니다.
+                val listenButton = clickableNodes.lastOrNull { 
+                    it.text == null || !it.text.toString().matches(Regex("^[a-zA-Z]+$")) 
                 }
-            }
 
-            if (wordNodes.isEmpty()) {
-                showToast("화면에서 터치할 영어 단어를 찾지 못했습니다.")
-                isTaskRunning = false
-                return@postDelayed
-            }
+                if (listenButton != null) {
+                    listenButton.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                    showToast("🔊 하단 보라색 버튼 클릭 완료")
+                }
 
-            // 알파벳 순 정렬
-            wordNodes.sortBy { it.text.toString().lowercase() }
-            showToast("${wordNodes.size}개의 단어 자동 터치 시작!")
-
-            // 순차 클릭
-            wordNodes.forEachIndexed { index, node ->
+                // 2. 소리 끝날 때까지 2.5초 대기 후 단어 클릭
                 handler.postDelayed({
-                    node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                }, (index + 1) * 300L)
+                    // 알파벳 순 정렬
+                    val sortedWords = wordNodes.sortedBy { it.text.toString().lowercase() }
+                    showToast("🔤 단어 ${sortedWords.size}개 정렬 터치 시작")
+
+                    sortedWords.forEachIndexed { index, node ->
+                        handler.postDelayed({
+                            node.performAction(AccessibilityNodeInfo.ACTION_CLICK)
+                        }, (index + 1) * 400L) // 0.4초 간격 터치
+                    }
+
+                    // 초기화 대기 (퀴즈를 풀고 다음 화면 넘어갈 시간 제공)
+                    handler.postDelayed({
+                        isTaskRunning = false
+                        showToast("✅ 한 문제 완료, 다음 대기 중")
+                    }, (sortedWords.size + 1) * 400L + 2000L)
+
+                }, 2500)
             }
-
-            // 초기화 대기
-            handler.postDelayed({
-                isTaskRunning = false
-            }, (wordNodes.size + 1) * 300L + 1500L)
-
-        }, 2000)
+        }
     }
 
-    // 화면에 알림 메시지를 띄우는 편의 기능
+    // 화면 트리를 뒤져서 클릭 가능한 모든 요소를 재귀적으로 찾아내는 함수
+    private fun findAllClickableNodes(node: AccessibilityNodeInfo?, list: MutableList<AccessibilityNodeInfo>) {
+        if (node == null) return
+        if (node.isClickable) {
+            list.add(node)
+        }
+        for (i in 0 until node.childCount) {
+            findAllClickableNodes(node.getChild(i), list)
+        }
+    }
+
     private fun showToast(message: String) {
         handler.post {
             Toast.makeText(applicationContext, message, Toast.LENGTH_SHORT).show()
