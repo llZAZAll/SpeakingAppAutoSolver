@@ -39,8 +39,8 @@ class MyAutoService : AccessibilityService() {
         Pair(799f, 2002f)  // S3 우하
     )
     
-    // 💡 ===== 비상 30연사(무지성 난타) 전용 안전 좌표 =====
-    private val LISTEN_BTN = Pair(480f, 2220f)
+    // 💡 ===== 비상 30연사 및 다시 듣기 공통 타겟 =====
+    private val LISTEN_BTN = Pair(480f, 2220f) // 하단 다시 듣기 버튼
     private val safeSpamSlots = arrayOf(
         Pair(278f, 1730f), // S0 좌상
         Pair(279f, 2005f), // S1 좌하
@@ -58,7 +58,7 @@ class MyAutoService : AccessibilityService() {
     private val cardWaitPolls = 15
     private val tapDuration = 60L
 
-    // 빈칸/카드 판별용 (칸 영역에 밝은 픽셀이 이만큼 이상이면 카드 있음)
+    // 빈칸/카드 판별용
     private val occBrightThreshold = 170
     private val occMinBrightPixels = 4
     private val occHalfW = 90
@@ -142,20 +142,24 @@ class MyAutoService : AccessibilityService() {
                 target = raw.lowercase().split(Regex("\\s+")).map { normalize(it) }.filter { it.isNotEmpty() }
                 Log.d("SOLVE", "카드 감지(${slotWord.size}). STT: \"$raw\" → $target")
                 
-                // 💡 [변경 1] STT 인식을 실패하면 멈추지 않고 30연사로 강제 돌파
                 if (target.isEmpty()) { 
                     triggerSpamFallback("❌ STT(음성) 인식 실패")
                     return@captureThen 
                 }
                 
                 updateLog("🤖 ${target.joinToString(" ")}")
+                
+                // 💡 [추가된 부분] 똑똑하게 차례대로 풀기 직전에 '다시 듣기' 1회 타격
+                clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
+                
+                // 다시 듣기를 누르고 기존 stepDelay(1.2초)만큼 넉넉히 대기 후 첫 단어 터치 시작
                 handler.postDelayed({ solveStep(0) }, stepDelay)
+                
             } else if (attempt < cardWaitPolls) {
                 updateLog("⏳ 카드 대기...(${attempt + 1})")
                 handler.postDelayed({ waitForCards(attempt + 1) }, pollDelay)
             } else { 
                 Log.e("SOLVE", "카드 안 뜸")
-                // 💡 [변경 2] 카드가 끝내 안 나타나도 뻗지 않고 30연사로 돌파
                 triggerSpamFallback("❌ 카드 화면 진입 실패")
             }
         }
@@ -164,7 +168,6 @@ class MyAutoService : AccessibilityService() {
     private fun solveStep(p: Int) {
         if (!solving) return
         
-        // 똑똑하게 정답을 다 맞춘 경우 정상 루프
         if (p >= target.size) {
             currentLoopCount++
             updateLog("✅ [$currentLoopCount] 정답 완료 → 다음 문제 진입")
@@ -241,7 +244,6 @@ class MyAutoService : AccessibilityService() {
         captureRetry++
         Log.w("SOLVE", "캡처 재시도($captureRetry): $reason")
         
-        // 💡 [변경 3] 캡처를 여러 번 실패하면 뻗지 않고 30연사로 돌파
         if (captureRetry > 6) { 
             triggerSpamFallback("❌ 화면 캡처 반복 에러")
         }
@@ -252,7 +254,6 @@ class MyAutoService : AccessibilityService() {
         retryAtSameStep++
         Log.w("SOLVE", "[$p] 재시도($retryAtSameStep): $reason")
         
-        // 💡 [변경 4] 글자를 도저히 못 찾겠으면 뻗지 않고 30연사로 돌파
         if (retryAtSameStep <= 3) handler.postDelayed({ solveStep(p) }, stepDelay)
         else { 
             Log.e("SOLVE", "[$p] 중단: $reason")
@@ -265,13 +266,18 @@ class MyAutoService : AccessibilityService() {
         if (!solving) return
         
         currentLoopCount++
-        updateLog("$reason\n⚠️ 비상 돌파! 30연사 가동 중...")
+        updateLog("$reason\n⚠️ 비상 돌파! 오리지널 30연사 가동 중...")
 
-        // 1) 다시 듣기 1회 타격
-        clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
+        var delayAccumulator = 0L
 
-        // 2) 0.8초 후 안전 좌표 30연타 시작
-        var delayAccumulator = 800L
+        // 1) 시작하자마자(0초) 다시 듣기 1회 타격
+        handler.postDelayed({
+            if (solving) clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
+        }, delayAccumulator)
+
+        delayAccumulator += 800L 
+
+        // 2) 0.8초 후 오리지널 좌표 30연타 시작
         for (i in 0 until 30) {
             val spot = safeSpamSlots[i % 4]
             handler.postDelayed({
@@ -357,17 +363,3 @@ class MyAutoService : AccessibilityService() {
     }
 
     private fun clickAt(x: Float, y: Float) {
-        val path = Path().apply { moveTo(x, y) }
-        val stroke = GestureDescription.StrokeDescription(path, 0, tapDuration)
-        dispatchGesture(GestureDescription.Builder().addStroke(stroke).build(), null, null)
-    }
-
-    private fun updateLog(msg: String) { handler.post { try { overlayTextView?.text = msg } catch (_: Throwable) {} } }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        try { windowManager?.removeView(overlayTextView) } catch (_: Throwable) {}
-    }
-
-    override fun onInterrupt() { solving = false }
-}
