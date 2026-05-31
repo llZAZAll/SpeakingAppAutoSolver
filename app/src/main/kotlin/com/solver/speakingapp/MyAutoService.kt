@@ -42,10 +42,10 @@ class MyAutoService : AccessibilityService() {
     // 💡 ===== 비상 30연사(무지성 난타) 전용 안전 좌표 =====
     private val LISTEN_BTN = Pair(480f, 2220f)
     private val safeSpamSlots = arrayOf(
-        Pair(240f, 1580f), // 좌상 (위로 올림)
-        Pair(720f, 1580f), // 우상 (위로 올림)
-        Pair(240f, 1790f), // 좌하 (북마크 회피)
-        Pair(720f, 1790f)  // 우하 (북마크 회피)
+        Pair(278f, 1730f), // S0 좌상
+        Pair(279f, 2005f), // S1 좌하
+        Pair(798f, 1732f), // S2 우상
+        Pair(799f, 2002f)  // S3 우하
     )
 
     private val bandTop = 1640
