@@ -31,13 +31,23 @@ class MyAutoService : AccessibilityService() {
     private var overlayTextView: TextView? = null
     private val ocrClient by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
-    // ===== 보정 값 =====
+    // ===== 보정 값 (OCR 정밀 타격용) =====
     private val slots = arrayOf(
         Pair(278f, 1730f), // S0 좌상
         Pair(279f, 2005f), // S1 좌하
         Pair(798f, 1732f), // S2 우상
         Pair(799f, 2002f)  // S3 우하
     )
+    
+    // 💡 ===== 비상 30연사(무지성 난타) 전용 안전 좌표 =====
+    private val LISTEN_BTN = Pair(480f, 2220f)
+    private val safeSpamSlots = arrayOf(
+        Pair(240f, 1580f), // 좌상 (위로 올림)
+        Pair(720f, 1580f), // 우상 (위로 올림)
+        Pair(240f, 1790f), // 좌하 (북마크 회피)
+        Pair(720f, 1790f)  // 우하 (북마크 회피)
+    )
+
     private val bandTop = 1640
     private val bandBottom = 2140
     private val snapRadius = 300f
@@ -49,8 +59,8 @@ class MyAutoService : AccessibilityService() {
     private val tapDuration = 60L
 
     // 빈칸/카드 판별용 (칸 영역에 밝은 픽셀이 이만큼 이상이면 카드 있음)
-    private val occBrightThreshold = 170   // 픽셀 밝기 임계(0~255). 흰 글자 감지용
-    private val occMinBrightPixels = 4     // 이만큼 이상 밝으면 카드 있다고 판단
+    private val occBrightThreshold = 170
+    private val occMinBrightPixels = 4
     private val occHalfW = 90
     private val occHalfH = 35
 
@@ -58,7 +68,7 @@ class MyAutoService : AccessibilityService() {
     private var retryAtSameStep = 0
     private var captureRetry = 0
     private var target: List<String> = emptyList()
-    private var currentLoopCount = 0 // 무한 루프 카운트 변수 활성화
+    private var currentLoopCount = 0
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -74,7 +84,7 @@ class MyAutoService : AccessibilityService() {
             }
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "🤖 무한 풀이 모드\n(볼륨[-] 시작 / 볼륨[+] 중단)"
+                text = "🤖 하이브리드 무한 모드\n(볼륨[-] 시작 / 볼륨[+] 중단)"
                 textSize = 13f
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundColor(android.graphics.Color.parseColor("#EE000000"))
@@ -106,7 +116,7 @@ class MyAutoService : AccessibilityService() {
             if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
                 solving = false
                 handler.removeCallbacksAndMessages(null)
-                updateLog("🛑 중단됨")
+                updateLog("🛑 매크로 완전히 중단됨")
                 return true
             }
         } catch (t: Throwable) { Log.e("SOLVE", "onKeyEvent 예외", t); return true }
@@ -131,34 +141,43 @@ class MyAutoService : AccessibilityService() {
                 val raw = AudioCaptureService.lastSentence
                 target = raw.lowercase().split(Regex("\\s+")).map { normalize(it) }.filter { it.isNotEmpty() }
                 Log.d("SOLVE", "카드 감지(${slotWord.size}). STT: \"$raw\" → $target")
-                if (target.isEmpty()) { updateLog("❌ STT 비어있음, 오디오 먼저"); solving = false; return@captureThen }
+                
+                // 💡 [변경 1] STT 인식을 실패하면 멈추지 않고 30연사로 강제 돌파
+                if (target.isEmpty()) { 
+                    triggerSpamFallback("❌ STT(음성) 인식 실패")
+                    return@captureThen 
+                }
+                
                 updateLog("🤖 ${target.joinToString(" ")}")
                 handler.postDelayed({ solveStep(0) }, stepDelay)
             } else if (attempt < cardWaitPolls) {
                 updateLog("⏳ 카드 대기...(${attempt + 1})")
                 handler.postDelayed({ waitForCards(attempt + 1) }, pollDelay)
-            } else { Log.e("SOLVE", "카드 안 뜸"); updateLog("❌ 카드가 안 떴어요"); solving = false }
+            } else { 
+                Log.e("SOLVE", "카드 안 뜸")
+                // 💡 [변경 2] 카드가 끝내 안 나타나도 뻗지 않고 30연사로 돌파
+                triggerSpamFallback("❌ 카드 화면 진입 실패")
+            }
         }
     }
 
     private fun solveStep(p: Int) {
         if (!solving) return
         
-        // 💡 [핵심 변경점] 정답을 다 맞춘 후 루프 처리
+        // 똑똑하게 정답을 다 맞춘 경우 정상 루프
         if (p >= target.size) {
             currentLoopCount++
-            updateLog("✅ [$currentLoopCount] 완료 → 다음 문제 진입")
+            updateLog("✅ [$currentLoopCount] 정답 완료 → 다음 문제 진입")
             Log.d("SOLVE", "완료, NEXT 탭")
             handler.postDelayed({
                 if (solving) clickAt(NEXT_BTN.first, NEXT_BTN.second)
                 
-                // 다음 문제 버튼을 누르고 화면이 완전히 넘어갈 때까지 대기(약 3.5초) 후 재시작
                 handler.postDelayed({
                     if (solving) {
                         retryAtSameStep = 0
                         captureRetry = 0
                         updateLog("⏳ 새 문제 대기 중...")
-                        waitForCards(0) // 무한 루프 재장전!
+                        waitForCards(0) 
                     }
                 }, 3500L) 
             }, 900)
@@ -171,16 +190,14 @@ class MyAutoService : AccessibilityService() {
             val occ = IntArray(4) { brightCount(bmp, it) }
             val occupied = BooleanArray(4) { occ[it] >= occMinBrightPixels }
             val needed = target[p]
-            Log.d("SOLVE", "[$p] 필요='$needed' 단어=${(0..3).associateWith { slotWord[it] }} 밝기=${occ.toList()} 카드=${occupied.toList()}")
 
-            // 1) 글자 매칭 (카드 있는 칸 중)
             var slotToTap = (0..3).firstOrNull { si ->
                 occupied[si] && slotWord[si]?.let { it == needed || lev(it, needed) <= 1 } == true
             } ?: -1
-            // 2) 소거법: 카드는 있는데 글자 인식이 안 된 칸이 딱 하나면 그게 정답
+            
             if (slotToTap < 0) {
                 val unrecOcc = (0..3).filter { occupied[it] && slotWord[it] == null }
-                if (unrecOcc.size == 1) { slotToTap = unrecOcc[0]; Log.d("SOLVE", "[$p] 소거법 → S$slotToTap") }
+                if (unrecOcc.size == 1) { slotToTap = unrecOcc[0] }
             }
 
             if (slotToTap >= 0) {
@@ -191,7 +208,7 @@ class MyAutoService : AccessibilityService() {
                 retryAtSameStep = 0
                 handler.postDelayed({ solveStep(p + 1) }, stepDelay)
             } else {
-                retryOrAbort(p, "'$needed' 못 찾음(단어=${slotWord.values}, 카드칸=${(0..3).filter { occupied[it] }})")
+                retryOrAbort(p, "단어 '$needed' 탐색 실패")
             }
         }
     }
@@ -223,15 +240,63 @@ class MyAutoService : AccessibilityService() {
         if (!solving) return
         captureRetry++
         Log.w("SOLVE", "캡처 재시도($captureRetry): $reason")
-        if (captureRetry > 6) { updateLog("❌ 캡처 반복 실패"); solving = false }
+        
+        // 💡 [변경 3] 캡처를 여러 번 실패하면 뻗지 않고 30연사로 돌파
+        if (captureRetry > 6) { 
+            triggerSpamFallback("❌ 화면 캡처 반복 에러")
+        }
     }
 
     private fun retryOrAbort(p: Int, reason: String) {
         if (!solving) return
         retryAtSameStep++
         Log.w("SOLVE", "[$p] 재시도($retryAtSameStep): $reason")
+        
+        // 💡 [변경 4] 글자를 도저히 못 찾겠으면 뻗지 않고 30연사로 돌파
         if (retryAtSameStep <= 3) handler.postDelayed({ solveStep(p) }, stepDelay)
-        else { Log.e("SOLVE", "[$p] 중단: $reason"); updateLog("❌ 중단: $reason"); solving = false }
+        else { 
+            Log.e("SOLVE", "[$p] 중단: $reason")
+            triggerSpamFallback("❌ 정답 매칭 실패")
+        }
+    }
+
+    // 🚀 ===== 비상 탈출 무지성 30연사 엔진 =====
+    private fun triggerSpamFallback(reason: String) {
+        if (!solving) return
+        
+        currentLoopCount++
+        updateLog("$reason\n⚠️ 비상 돌파! 30연사 가동 중...")
+
+        // 1) 다시 듣기 1회 타격
+        clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
+
+        // 2) 0.8초 후 안전 좌표 30연타 시작
+        var delayAccumulator = 800L
+        for (i in 0 until 30) {
+            val spot = safeSpamSlots[i % 4]
+            handler.postDelayed({
+                if (solving) clickAt(spot.first, spot.second)
+            }, delayAccumulator)
+            delayAccumulator += 50L // 0.05초 간격
+        }
+
+        // 3) 연타 종료 1초 후 다음 문제 터치
+        handler.postDelayed({
+            if (solving) {
+                updateLog("⏭️ 비상 돌파 완료 -> 다음 문제")
+                clickAt(NEXT_BTN.first, NEXT_BTN.second)
+            }
+        }, delayAccumulator + 1000L)
+
+        // 4) 4초 뒤 다시 스마트(OCR) 모드로 루프 재장전
+        handler.postDelayed({
+            if (solving) {
+                retryAtSameStep = 0
+                captureRetry = 0
+                updateLog("⏳ 새 문제 대기 중...")
+                waitForCards(0)
+            }
+        }, delayAccumulator + 5000L)
     }
 
     private fun extractSlotWords(result: Text): HashMap<Int, String> {
@@ -247,7 +312,6 @@ class MyAutoService : AccessibilityService() {
         return slotWord
     }
 
-    // 칸 영역에서 '밝은(흰 글자) 픽셀' 개수 → 카드 유무 판별
     private fun brightCount(bmp: Bitmap, slot: Int): Int {
         val cx = slots[slot].first.toInt(); val cy = slots[slot].second.toInt()
         val x0 = (cx - occHalfW).coerceAtLeast(0); val x1 = (cx + occHalfW).coerceAtMost(bmp.width - 1)
