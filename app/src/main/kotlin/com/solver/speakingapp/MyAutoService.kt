@@ -31,38 +31,39 @@ class MyAutoService : AccessibilityService() {
     private var overlayTextView: TextView? = null
     private val ocrClient by lazy { TextRecognition.getClient(TextRecognizerOptions.DEFAULT_OPTIONS) }
 
-    // ===== 보정 값 (OCR 정밀 타격용) =====
+    // ===== 보정 값 (Note10 / 1080x2280) =====
     private val slots = arrayOf(
-        Pair(278f, 1730f), // S0 좌상
-        Pair(279f, 2005f), // S1 좌하
-        Pair(798f, 1732f), // S2 우상
-        Pair(799f, 2002f)  // S3 우하
+        Pair(279f, 1489f), // S0 좌상
+        Pair(279f, 1759f), // S1 좌하
+        Pair(799f, 1489f), // S2 우상
+        Pair(799f, 1759f)  // S3 우하
     )
-    
-    // 💡 ===== 비상 30연사 및 다시 듣기 공통 타겟 =====
-    private val LISTEN_BTN = Pair(480f, 2220f) // 하단 다시 듣기 버튼
+
+    // 💡 비상 30연사 및 다시 듣기 공통 타겟
+    private val LISTEN_BTN = Pair(540f, 1999f) // 하단 다시 듣기 버튼
     private val safeSpamSlots = arrayOf(
-        Pair(240f, 1710f), // 좌상 (원래 좌표)
-        Pair(720f, 1710f), // 우상 (원래 좌표)
-        Pair(240f, 1980f), // 좌하 (원래 좌표)
-        Pair(720f, 1980f)  // 우하 (원래 좌표)
+        Pair(279f, 1489f), // 좌상
+        Pair(799f, 1489f), // 우상
+        Pair(279f, 1759f), // 좌하
+        Pair(799f, 1759f)  // 우하
     )
 
-    private val bandTop = 1640
-    private val bandBottom = 2140
-    private val snapRadius = 300f
-    private val NEXT_BTN = Pair(900f, 2100f)
+    private val bandTop = 1340
+    private val bandBottom = 1920
+    private val snapRadius = 320f
+    private val NEXT_BTN = Pair(886f, 1930f)   // '다음 문제' 버튼 (Note10 결과화면 측정값)
 
-    private val stepDelay = 1200L
-    private val pollDelay = 1200L
-    private val cardWaitPolls = 15
+    private val stepDelay = 1000L
+    private val pollDelay = 1000L
+    private val cardWaitPolls = 8      // 카드 대기 최대 횟수 (1초 × 8 ≈ 8초)
+    private val maxLoops = 300         // 자동 풀이 최대 문제 수 (도달 시 자동 종료)
     private val tapDuration = 60L
 
-    // 빈칸/카드 판별용
+    // 빈칸/카드 판별용 (카드가 커서 영역도 키움)
     private val occBrightThreshold = 170
     private val occMinBrightPixels = 4
-    private val occHalfW = 90
-    private val occHalfH = 35
+    private val occHalfW = 150
+    private val occHalfH = 70
 
     @Volatile private var solving = false
     private var retryAtSameStep = 0
@@ -84,7 +85,7 @@ class MyAutoService : AccessibilityService() {
             }
             windowManager = getSystemService(WINDOW_SERVICE) as WindowManager
             overlayTextView = TextView(this).apply {
-                text = "🤖 하이브리드 무한 모드\n(볼륨[-] 시작 / 볼륨[+] 중단)"
+                text = "🤖 자동 풀이 모드\n(볼륨[-] 시작 / 볼륨[+] 중단)"
                 textSize = 13f
                 setTextColor(android.graphics.Color.WHITE)
                 setBackgroundColor(android.graphics.Color.parseColor("#EE000000"))
@@ -116,7 +117,7 @@ class MyAutoService : AccessibilityService() {
             if (event.keyCode == KeyEvent.KEYCODE_VOLUME_UP && event.action == KeyEvent.ACTION_DOWN) {
                 solving = false
                 handler.removeCallbacksAndMessages(null)
-                updateLog("🛑 매크로 완전히 중단됨")
+                updateLog("🛑 중단됨")
                 return true
             }
         } catch (t: Throwable) { Log.e("SOLVE", "onKeyEvent 예외", t); return true }
@@ -133,6 +134,22 @@ class MyAutoService : AccessibilityService() {
         waitForCards(0)
     }
 
+    // 다음 문제로 진행하되, 최대 반복 수에 도달하면 자동 종료
+    private fun nextOrStop() {
+        if (!solving) return
+        if (currentLoopCount >= maxLoops) {
+            solving = false
+            handler.removeCallbacksAndMessages(null)
+            updateLog("✅ $maxLoops 문제 완료 — 자동 종료")
+            Log.d("SOLVE", "최대 반복($maxLoops) 도달 → 종료")
+            return
+        }
+        retryAtSameStep = 0
+        captureRetry = 0
+        updateLog("⏳ 새 문제 대기 중... ($currentLoopCount/$maxLoops)")
+        waitForCards(0)
+    }
+
     private fun waitForCards(attempt: Int) {
         if (!solving) return
         captureThen { result, _ ->
@@ -141,24 +158,23 @@ class MyAutoService : AccessibilityService() {
                 val raw = AudioCaptureService.lastSentence
                 target = raw.lowercase().split(Regex("\\s+")).map { normalize(it) }.filter { it.isNotEmpty() }
                 Log.d("SOLVE", "카드 감지(${slotWord.size}). STT: \"$raw\" → $target")
-                
-                if (target.isEmpty()) { 
+
+                if (target.isEmpty()) {
                     triggerSpamFallback("❌ STT(음성) 인식 실패")
-                    return@captureThen 
+                    return@captureThen
                 }
-                
+
                 updateLog("🤖 ${target.joinToString(" ")}")
-                
-                // 똑똑하게 차례대로 풀기 직전에 '다시 듣기' 1회 타격
+
+                // 풀기 직전 '다시 듣기' 1회 타격
                 clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
-                
-                // 다시 듣기를 누르고 기존 stepDelay(1.2초)만큼 넉넉히 대기 후 첫 단어 터치 시작
+
                 handler.postDelayed({ solveStep(0) }, stepDelay)
-                
+
             } else if (attempt < cardWaitPolls) {
                 updateLog("⏳ 카드 대기...(${attempt + 1})")
                 handler.postDelayed({ waitForCards(attempt + 1) }, pollDelay)
-            } else { 
+            } else {
                 Log.e("SOLVE", "카드 안 뜸")
                 triggerSpamFallback("❌ 카드 화면 진입 실패")
             }
@@ -167,40 +183,34 @@ class MyAutoService : AccessibilityService() {
 
     private fun solveStep(p: Int) {
         if (!solving) return
-        
+
         if (p >= target.size) {
             currentLoopCount++
             updateLog("✅ [$currentLoopCount] 정답 완료 → 다음 문제 진입")
             Log.d("SOLVE", "완료, NEXT 탭")
             handler.postDelayed({
                 if (solving) clickAt(NEXT_BTN.first, NEXT_BTN.second)
-                
-                handler.postDelayed({
-                    if (solving) {
-                        retryAtSameStep = 0
-                        captureRetry = 0
-                        updateLog("⏳ 새 문제 대기 중...")
-                        waitForCards(0) 
-                    }
-                }, 3500L) 
-            }, 900)
+
+                handler.postDelayed({ nextOrStop() }, 2000L)
+            }, 500)
             return
         }
-        
+
         captureThen { result, bmp ->
             if (!solving) return@captureThen
             val slotWord = extractSlotWords(result)
             val occ = IntArray(4) { brightCount(bmp, it) }
             val occupied = BooleanArray(4) { occ[it] >= occMinBrightPixels }
             val needed = target[p]
+            Log.d("SOLVE", "[$p] 필요='$needed' 단어=${(0..3).associateWith { slotWord[it] }} 밝기=${occ.toList()} 카드=${occupied.toList()}")
 
             var slotToTap = (0..3).firstOrNull { si ->
                 occupied[si] && slotWord[si]?.let { it == needed || lev(it, needed) <= 1 } == true
             } ?: -1
-            
+
             if (slotToTap < 0) {
                 val unrecOcc = (0..3).filter { occupied[it] && slotWord[it] == null }
-                if (unrecOcc.size == 1) { slotToTap = unrecOcc[0] }
+                if (unrecOcc.size == 1) { slotToTap = unrecOcc[0]; Log.d("SOLVE", "[$p] 소거법 → S$slotToTap") }
             }
 
             if (slotToTap >= 0) {
@@ -243,72 +253,47 @@ class MyAutoService : AccessibilityService() {
         if (!solving) return
         captureRetry++
         Log.w("SOLVE", "캡처 재시도($captureRetry): $reason")
-        
-        if (captureRetry > 6) { 
-            triggerSpamFallback("❌ 화면 캡처 반복 에러")
-        }
+        if (captureRetry > 6) { triggerSpamFallback("❌ 화면 캡처 반복 에러") }
     }
 
     private fun retryOrAbort(p: Int, reason: String) {
         if (!solving) return
         retryAtSameStep++
         Log.w("SOLVE", "[$p] 재시도($retryAtSameStep): $reason")
-        
         if (retryAtSameStep <= 3) handler.postDelayed({ solveStep(p) }, stepDelay)
-        else { 
+        else {
             Log.e("SOLVE", "[$p] 중단: $reason")
             triggerSpamFallback("❌ 정답 매칭 실패")
         }
     }
 
-    // 🚀 ===== 비상 탈출 무지성 30연사 엔진 =====
+    // 보조 모드: OCR/STT 실패 시 카드 좌표를 순서대로 빠르게 탭
     private fun triggerSpamFallback(reason: String) {
         if (!solving) return
-        
         currentLoopCount++
-        updateLog("$reason\n⚠️ 비상 돌파! 오리지널 30연사 가동 중...")
+        updateLog("$reason\n보조 방식으로 다시 시도 중...")
 
         var delayAccumulator = 0L
+        handler.postDelayed({ if (solving) clickAt(LISTEN_BTN.first, LISTEN_BTN.second) }, delayAccumulator)
+        delayAccumulator += 800L
 
-        // 1) 비상 연사 시작 전 '다시 듣기' 1회 타격
-        handler.postDelayed({
-            if (solving) clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
-        }, delayAccumulator)
-
-        delayAccumulator += 800L 
-
-        // 2) 0.8초 후 오리지널 좌표 30연타 시작
         for (i in 0 until 30) {
             val spot = safeSpamSlots[i % 4]
-            handler.postDelayed({
-                if (solving) clickAt(spot.first, spot.second)
-            }, delayAccumulator)
-            delayAccumulator += 50L // 0.05초 간격
+            handler.postDelayed({ if (solving) clickAt(spot.first, spot.second) }, delayAccumulator)
+            delayAccumulator += 50L
         }
 
-        // 3) 연타 종료 1초 후 다음 문제 터치
         handler.postDelayed({
             if (solving) {
-                updateLog("⏭️ 비상 돌파 완료 -> 다음 문제")
+                updateLog("⏭️ 보조 시도 완료 → 다음 문제로")
                 clickAt(NEXT_BTN.first, NEXT_BTN.second)
             }
         }, delayAccumulator + 1000L)
 
-        // 4) 4초 뒤 다시 스마트(OCR) 모드로 루프 재장전
-        handler.postDelayed({
-            if (solving) {
-                retryAtSameStep = 0
-                captureRetry = 0
-                updateLog("⏳ 새 문제 대기 중...")
-                waitForCards(0)
-            }
-        }, delayAccumulator + 5000L)
+        handler.postDelayed({ nextOrStop() }, delayAccumulator + 5000L)
     }
 
-    // ==========================================
-    // 유틸리티 함수 모음
-    // ==========================================
-
+    // ===== 유틸 =====
     private fun extractSlotWords(result: Text): HashMap<Int, String> {
         val slotWord = HashMap<Int, String>()
         for (block in result.textBlocks) for (line in block.lines) for (el in line.elements) {
