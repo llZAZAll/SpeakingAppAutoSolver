@@ -58,6 +58,8 @@ class MyAutoService : AccessibilityService() {
     private val cardWaitPolls = 8      // 카드 대기 최대 횟수 (1초 × 8 ≈ 8초)
     private val maxLoops = 300         // 자동 풀이 최대 문제 수 (도달 시 자동 종료)
     private val tapDuration = 60L
+    private val sttWaitPolls = 8       // 새 음성 인식 대기 최대 횟수 (1초 × 8 ≈ 8초)
+    private val sttPollDelay = 1000L
 
     // 빈칸/카드 판별용 (카드가 커서 영역도 키움)
     private val occBrightThreshold = 170
@@ -70,6 +72,7 @@ class MyAutoService : AccessibilityService() {
     private var captureRetry = 0
     private var target: List<String> = emptyList()
     private var currentLoopCount = 0
+    private var listenStartTime = 0L
 
     override fun onServiceConnected() {
         super.onServiceConnected()
@@ -155,22 +158,12 @@ class MyAutoService : AccessibilityService() {
         captureThen { result, _ ->
             val slotWord = extractSlotWords(result)
             if (slotWord.isNotEmpty()) {
-                val raw = AudioCaptureService.lastSentence
-                target = raw.lowercase().split(Regex("\\s+")).map { normalize(it) }.filter { it.isNotEmpty() }
-                Log.d("SOLVE", "카드 감지(${slotWord.size}). STT: \"$raw\" → $target")
-
-                if (target.isEmpty()) {
-                    triggerSpamFallback("❌ STT(음성) 인식 실패")
-                    return@captureThen
-                }
-
-                updateLog("🤖 ${target.joinToString(" ")}")
-
-                // 풀기 직전 '다시 듣기' 1회 타격
+                Log.d("SOLVE", "카드 감지(${slotWord.size}). 다시 듣기 후 새 음성 인식 대기")
+                updateLog("🔊 다시 듣고 인식 중...")
+                // 이전 문제 문장 재사용 방지: 지금 이후에 인식된 문장만 사용
+                listenStartTime = System.currentTimeMillis()
                 clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
-
-                handler.postDelayed({ solveStep(0) }, stepDelay)
-
+                waitForFreshStt(0)
             } else if (attempt < cardWaitPolls) {
                 updateLog("⏳ 카드 대기...(${attempt + 1})")
                 handler.postDelayed({ waitForCards(attempt + 1) }, pollDelay)
@@ -178,6 +171,23 @@ class MyAutoService : AccessibilityService() {
                 Log.e("SOLVE", "카드 안 뜸")
                 triggerSpamFallback("❌ 카드 화면 진입 실패")
             }
+        }
+    }
+
+    // 다시 듣기를 누른 시점 이후에 새로 인식된 문장이 들어올 때까지 대기
+    private fun waitForFreshStt(attempt: Int) {
+        if (!solving) return
+        if (AudioCaptureService.lastUpdateTime > listenStartTime) {
+            val raw = AudioCaptureService.lastSentence
+            target = raw.lowercase().split(Regex("\\s+")).map { normalize(it) }.filter { it.isNotEmpty() }
+            Log.d("SOLVE", "새 STT: \"$raw\" → $target")
+            if (target.isEmpty()) { triggerSpamFallback("❌ STT(음성) 인식 실패"); return }
+            updateLog("🤖 ${target.joinToString(" ")}")
+            handler.postDelayed({ solveStep(0) }, stepDelay)
+        } else if (attempt < sttWaitPolls) {
+            handler.postDelayed({ waitForFreshStt(attempt + 1) }, sttPollDelay)
+        } else {
+            triggerSpamFallback("❌ 새 음성 인식 시간 초과")
         }
     }
 
@@ -274,8 +284,6 @@ class MyAutoService : AccessibilityService() {
         updateLog("$reason\n보조 방식으로 다시 시도 중...")
 
         var delayAccumulator = 0L
-        handler.postDelayed({ if (solving) clickAt(LISTEN_BTN.first, LISTEN_BTN.second) }, delayAccumulator)
-        delayAccumulator += 800L
 
         for (i in 0 until 30) {
             val spot = safeSpamSlots[i % 4]
