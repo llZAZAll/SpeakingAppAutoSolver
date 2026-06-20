@@ -103,7 +103,7 @@ class MyAutoService : AccessibilityService() {
                 layoutType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
-            ).apply { gravity = Gravity.TOP; y = 90 }
+            ).apply { gravity = Gravity.TOP; y = 250 }
             windowManager?.addView(overlayTextView, params)
         } catch (t: Throwable) { Log.e("SOLVE", "onServiceConnected 예외", t) }
     }
@@ -165,7 +165,7 @@ class MyAutoService : AccessibilityService() {
                 clickAt(LISTEN_BTN.first, LISTEN_BTN.second)
                 waitForFreshStt(0)
             } else if (attempt < cardWaitPolls) {
-                updateLog("⏳ 카드 대기...(${attempt + 1})")
+                updateLog("⏳ 카드 대기...")
                 handler.postDelayed({ waitForCards(attempt + 1) }, pollDelay)
             } else {
                 Log.e("SOLVE", "카드 안 뜸")
@@ -195,14 +195,10 @@ class MyAutoService : AccessibilityService() {
         if (!solving) return
 
         if (p >= target.size) {
-            currentLoopCount++
-            updateLog("✅ [$currentLoopCount] 정답 완료 → 다음 문제 진입")
-            Log.d("SOLVE", "완료, NEXT 탭")
-            handler.postDelayed({
-                if (solving) clickAt(NEXT_BTN.first, NEXT_BTN.second)
-
-                handler.postDelayed({ nextOrStop() }, 2000L)
-            }, 500)
+            // 다 놓은 것으로 보이지만, STT가 단어를 덜 인식했을 수 있으므로
+            // 카드가 남아있는지 확인 후 처리 (잠시 대기 → 화면 안정화)
+            updateLog("🔎 남은 카드 확인 중...")
+            handler.postDelayed({ verifyCompleteOrFallback() }, stepDelay)
             return
         }
 
@@ -232,6 +228,29 @@ class MyAutoService : AccessibilityService() {
                 handler.postDelayed({ solveStep(p + 1) }, stepDelay)
             } else {
                 retryOrAbort(p, "단어 '$needed' 탐색 실패")
+            }
+        }
+    }
+
+    // 모든 target 단어를 놓은 뒤: 카드가 남아있으면 미완성으로 보고 보조 모드, 없으면 다음 문제
+    private fun verifyCompleteOrFallback() {
+        if (!solving) return
+        captureThen { result, bmp ->
+            if (!solving) return@captureThen
+            val slotWord = extractSlotWords(result)
+            val remaining = (0..3).count { brightCount(bmp, it) >= occMinBrightPixels }
+            Log.d("SOLVE", "완료 검증: 남은 카드=$remaining, 인식=${slotWord.values}")
+            if (remaining > 0) {
+                // 아직 카드가 남음 = 다 맞춘 게 아님 (음성 인식 누락 추정)
+                triggerSpamFallback("⚠️ 카드가 남아있음 — 보조 모드로 마무리")
+            } else {
+                currentLoopCount++
+                updateLog("✅ [$currentLoopCount] 정답 완료 → 다음 문제")
+                Log.d("SOLVE", "카드 없음 확인, NEXT 탭")
+                handler.postDelayed({
+                    if (solving) clickAt(NEXT_BTN.first, NEXT_BTN.second)
+                    handler.postDelayed({ nextOrStop() }, 2000L)
+                }, 500)
             }
         }
     }
