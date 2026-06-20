@@ -34,9 +34,9 @@ class AudioCaptureService : Service() {
         const val ACTION_RESULT = "com.solver.speakingapp.STT_RESULT"
         const val EXTRA_TEXT = "text"
 
-        // 인식된 최신 문장. 나중에 접근성 서비스가 여기서 읽어감.
-        @Volatile
-        var lastSentence: String = ""
+        // 인식된 최신 문장 + 갱신 시각(이전 문장 재사용 방지에 사용)
+        @Volatile var lastSentence: String = ""
+        @Volatile var lastUpdateTime: Long = 0L
     }
 
     private var projection: MediaProjection? = null
@@ -51,7 +51,6 @@ class AudioCaptureService : Service() {
     override fun onCreate() {
         super.onCreate()
         createChannel()
-        // Vosk 모델 비동기 언팩 (assets/vosk-model-en -> filesDir/model)
         StorageService.unpack(
             this, "vosk-model-en", "model",
             { m -> model = m; Log.d("STT", "✅ Vosk 모델 로드 완료") },
@@ -60,11 +59,8 @@ class AudioCaptureService : Service() {
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopCapture(); stopSelf(); return START_NOT_STICKY
-        }
+        if (intent?.action == ACTION_STOP) { stopCapture(); stopSelf(); return START_NOT_STICKY }
 
-        // Android 10+ : getMediaProjection 전에 mediaProjection 타입 포그라운드여야 함
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             startForeground(1, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION)
         } else {
@@ -89,7 +85,6 @@ class AudioCaptureService : Service() {
 
     private fun startCapture() {
         val mp = projection ?: return
-
         val config = AudioPlaybackCaptureConfiguration.Builder(mp)
             .addMatchingUsage(AudioAttributes.USAGE_MEDIA)
             .addMatchingUsage(AudioAttributes.USAGE_GAME)
@@ -102,9 +97,7 @@ class AudioCaptureService : Service() {
             .setChannelMask(AudioFormat.CHANNEL_IN_MONO)
             .build()
 
-        val minBuf = AudioRecord.getMinBufferSize(
-            sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
-        )
+        val minBuf = AudioRecord.getMinBufferSize(sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT)
 
         record = try {
             AudioRecord.Builder()
@@ -113,41 +106,28 @@ class AudioCaptureService : Service() {
                 .setAudioPlaybackCaptureConfig(config)
                 .build()
         } catch (e: Exception) {
-            Log.e("STT", "❌ AudioRecord 생성 실패: ${e.message}")
-            null
+            Log.e("STT", "❌ AudioRecord 생성 실패: ${e.message}"); null
         } ?: return
 
         record?.startRecording()
         capturing = true
-        Log.d("STT", "🎧 오디오 캡처 시작 (영어앱 오디오를 재생해 보세요)")
+        Log.d("STT", "🎧 오디오 캡처 시작")
 
         thread(name = "stt-loop") {
             var waited = 0
             while (model == null && waited < 8000) { Thread.sleep(100); waited += 100 }
             val m = model
-            if (m == null) { Log.e("STT", "❌ 모델이 준비되지 않아 중단"); return@thread }
+            if (m == null) { Log.e("STT", "❌ 모델 미준비, 중단"); return@thread }
 
             val rec = Recognizer(m, sampleRate.toFloat())
             recognizer = rec
             val buffer = ByteArray(minBuf)
-            var silentReads = 0
-
             while (capturing) {
                 val n = record?.read(buffer, 0, buffer.size) ?: 0
                 if (n > 0) {
-                    // 무음(0) 데이터가 계속 오면 = 앱이 캡처를 막았을 가능성
-                    if (buffer.take(n).all { it.toInt() == 0 }) {
-                        silentReads++
-                        if (silentReads == 100) Log.w("STT", "⚠️ 계속 무음입니다. 이 앱이 오디오 캡처를 차단했을 수 있어요.")
-                    } else {
-                        silentReads = 0
-                    }
                     if (rec.acceptWaveForm(buffer, n)) {
                         val text = JSONObject(rec.result).optString("text").trim()
                         if (text.isNotEmpty()) emit(text)
-                    } else {
-                        val p = JSONObject(rec.partialResult).optString("partial").trim()
-                        if (p.isNotEmpty()) Log.v("STT", "… $p")
                     }
                 }
             }
@@ -158,6 +138,7 @@ class AudioCaptureService : Service() {
 
     private fun emit(text: String) {
         lastSentence = text
+        lastUpdateTime = System.currentTimeMillis()
         Log.d("STT", "🗣️ 인식 문장: \"$text\"")
         sendBroadcast(Intent(ACTION_RESULT).putExtra(EXTRA_TEXT, text).setPackage(packageName))
     }
@@ -191,7 +172,7 @@ class AudioCaptureService : Service() {
         val b = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O)
             Notification.Builder(this, CHANNEL_ID) else Notification.Builder(this)
         return b.setContentTitle("오디오 캡처 중")
-            .setContentText("STT 동작 중")
+            .setContentText("음성 인식 동작 중")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
             .build()
     }
