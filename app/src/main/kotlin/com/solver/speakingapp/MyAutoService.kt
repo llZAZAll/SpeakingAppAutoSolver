@@ -54,9 +54,9 @@ class MyAutoService : AccessibilityService() {
     private val NEXT_BTN = Pair(886f, 1930f)   // '다음 문제' 버튼 (Note10 결과화면 측정값)
 
     private val stepDelay = 1000L
+    private val wordTapDelay = 500L    // 카드 단어 사이 간격 (테스트)
     private val pollDelay = 1000L
     private val cardWaitPolls = 8      // 카드 대기 최대 횟수 (1초 × 8 ≈ 8초)
-    private val maxLoops = 300         // 자동 풀이 최대 문제 수 (도달 시 자동 종료)
     private val tapDuration = 60L
     private val sttWaitPolls = 8       // 새 음성 인식 대기 최대 횟수 (1초 × 8 ≈ 8초)
     private val sttPollDelay = 1000L
@@ -103,7 +103,7 @@ class MyAutoService : AccessibilityService() {
                 layoutType,
                 WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE or WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE,
                 PixelFormat.TRANSLUCENT
-            ).apply { gravity = Gravity.TOP; y = 250 }
+            ).apply { gravity = Gravity.TOP; y = 170 }
             windowManager?.addView(overlayTextView, params)
         } catch (t: Throwable) { Log.e("SOLVE", "onServiceConnected 예외", t) }
     }
@@ -137,19 +137,12 @@ class MyAutoService : AccessibilityService() {
         waitForCards(0)
     }
 
-    // 다음 문제로 진행하되, 최대 반복 수에 도달하면 자동 종료
+    // 다음 문제로 진행 (종료는 '카드 없으면 정지'가 처리)
     private fun nextOrStop() {
         if (!solving) return
-        if (currentLoopCount >= maxLoops) {
-            solving = false
-            handler.removeCallbacksAndMessages(null)
-            updateLog("✅ $maxLoops 문제 완료 — 자동 종료")
-            Log.d("SOLVE", "최대 반복($maxLoops) 도달 → 종료")
-            return
-        }
         retryAtSameStep = 0
         captureRetry = 0
-        updateLog("⏳ 새 문제 대기 중... ($currentLoopCount/$maxLoops)")
+        updateLog("⏳ 새 문제 대기 중... ($currentLoopCount)")
         waitForCards(0)
     }
 
@@ -168,8 +161,8 @@ class MyAutoService : AccessibilityService() {
                 updateLog("⏳ 카드 대기...")
                 handler.postDelayed({ waitForCards(attempt + 1) }, pollDelay)
             } else {
-                Log.e("SOLVE", "카드 안 뜸")
-                triggerSpamFallback("❌ 카드 화면 진입 실패")
+                Log.d("SOLVE", "카드 안 뜸 → 문제 화면 아님으로 보고 정지")
+                stopWithReason("문제 화면이 아니어서 정지 (세트 종료/메뉴 추정)")
             }
         }
     }
@@ -225,7 +218,7 @@ class MyAutoService : AccessibilityService() {
                 updateLog("[${p + 1}/${target.size}] '$needed'")
                 clickAt(x, y)
                 retryAtSameStep = 0
-                handler.postDelayed({ solveStep(p + 1) }, stepDelay)
+                handler.postDelayed({ solveStep(p + 1) }, wordTapDelay)
             } else {
                 retryOrAbort(p, "단어 '$needed' 탐색 실패")
             }
@@ -389,6 +382,13 @@ class MyAutoService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         try { windowManager?.removeView(overlayTextView) } catch (_: Throwable) {}
+    }
+
+    private fun stopWithReason(msg: String) {
+        solving = false
+        handler.removeCallbacksAndMessages(null)
+        updateLog("⏹ $msg")
+        Log.d("SOLVE", "정지: $msg")
     }
 
     override fun onInterrupt() { solving = false }
