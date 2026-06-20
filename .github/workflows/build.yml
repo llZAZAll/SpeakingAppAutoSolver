@@ -31,18 +31,22 @@ jobs:
           unzip -q vosk.zip
           mkdir -p app/src/main/assets/vosk-model-en
           cp -r vosk-model-small-en-us-0.15/* app/src/main/assets/vosk-model-en/
-          # Vosk StorageService가 첫 번째로 여는 uuid 파일 (없으면 모델 로드 실패)
           echo "speakingapp-vosk-en-0.15" > app/src/main/assets/vosk-model-en/uuid
-          echo "=== 모델 파일 목록 (am/conf/graph/ivector + uuid 가 보여야 정상) ==="
+          echo "=== 모델 파일 목록 ==="
           ls -la app/src/main/assets/vosk-model-en/
 
       # 3. 빌드
       - name: Build with Gradle
         run: gradle assembleDebug
 
+      # 3-5. APK 파일명을 앱명으로 변경 (이 이름만 바꾸면 됩니다)
+      - name: Rename APK
+        run: |
+          mv "app/build/outputs/apk/debug/app-debug.apk" "app/build/outputs/apk/debug/Speaking App Auto Solver.apk"
+
       # 4. 완성된 APK 업로드
       - name: Upload APK artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: app-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          name: SpeakingAppAutoSolver
+          path: "app/build/outputs/apk/debug/Speaking App Auto Solver.apk"
